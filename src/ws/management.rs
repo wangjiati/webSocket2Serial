@@ -3,8 +3,9 @@
 //! 路由 `GET /ws`：握手校验 Origin 白名单（失败 403），升级后立即推送 `hello`。
 //! 每个连接一个写任务从 `mpsc::channel(256)` 取文本帧写 sink；主循环把应答与
 //! 广播事件统一排队：响应用 `try_send`，队列满则发 1013 关闭。`session.state`/
-//! `ports.changed`/`admin.state` 始终转发（满 → 1013）；`debug.frame` 只转发给
-//! 订阅集且满则静默丢弃（靠 `seq` 缺口提示）。心跳每 5s 发 Ping，10s 无 Pong 判死。
+//! `ports.changed`/`admin.state` 始终转发；`debug.frame` 只转发给订阅集且 seq 去重。
+//! 写队列满或广播落后（`RecvError::Lagged`）一律按 1013 关闭，避免静默丢状态事件。
+//! 心跳每 5s 发 Ping，10s 无 Pong 判死。
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -183,12 +184,19 @@ async fn run_management_loop(app: Arc<AppState>, socket: WebSocket) {
 
     loop {
         tokio::select! {
-            biased;
             event = event_rx.recv() => {
                 match event {
-                    Ok(event) => forward_event(&subscription, &tx, &close_tx, event),
+                    Ok(event) => {
+                        if forward_event(&subscription, &tx, event) {
+                            let _ = close_tx.send(Some(1013));
+                            break;
+                        }
+                    }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                        tracing::debug!("管理事件广播落后，跳过一批");
+                        // 广播落后意味着已有事件被整批丢弃（可能含状态事件），
+                        // 无法恢复顺序：按 1013 关闭，让客户端重连 + session.list 对齐。
+                        let _ = close_tx.send(Some(1013));
+                        break;
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
@@ -241,7 +249,11 @@ async fn run_management_loop(app: Arc<AppState>, socket: WebSocket) {
                     let _ = close_tx.send(Some(1001));
                     break;
                 }
-                let _ = tx.try_send(Message::Ping(Vec::new()));
+                if tx.try_send(Message::Ping(Vec::new())).is_err() {
+                    // Ping 也无法入队：写队列已满，连接无法维持 liveness，关闭。
+                    let _ = close_tx.send(Some(1013));
+                    break;
+                }
             }
         }
     }
@@ -251,32 +263,25 @@ async fn run_management_loop(app: Arc<AppState>, socket: WebSocket) {
     drop(writer);
 }
 
-/// 把一条广播事件转发到管理连接写队列。
+/// 把一条广播事件转发到管理连接写队列；返回 `true` 表示写队列满、连接应关闭。
 ///
-/// `session.state`/`ports.changed`/`admin.state` 始终转发，队列满 → 1013；
-/// `debug.frame` 只转发给订阅集且 seq 去重，队列满 → 静默丢弃（靠 seq 缺口提示）。
+/// `debug.frame` 仅转发给订阅集且 seq 去重（不匹配/重复不算错误，返回 `false`）；
+/// 任何事件 `try_send` 满均返回 `true`——状态事件不静默丢，debug 帧满同样关闭。
 fn forward_event(
     subscription: &Mutex<Subscription>,
     tx: &mpsc::Sender<Message>,
-    close_tx: &watch::Sender<Option<u16>>,
     event: Event,
-) {
-    let drop_on_full = match &event {
-        Event::DebugFrame(data) => {
-            let mut sub = subscription.lock().unwrap();
-            if !sub.contains(&data.session_id) || !sub.track(&data.session_id, data.frame.seq) {
-                return;
-            }
-            true
+) -> bool {
+    if let Event::DebugFrame(data) = &event {
+        let mut sub = subscription.lock().unwrap();
+        if !sub.contains(&data.session_id) || !sub.track(&data.session_id, data.frame.seq) {
+            return false;
         }
-        _ => false,
-    };
-    let Ok(json) = serde_json::to_string(&event) else {
-        return;
-    };
-    if tx.try_send(Message::Text(json)).is_err() && !drop_on_full {
-        let _ = close_tx.send(Some(1013));
     }
+    let Ok(json) = serde_json::to_string(&event) else {
+        return false;
+    };
+    tx.try_send(Message::Text(json)).is_err()
 }
 
 /// 把应答序列化后 `try_send` 进写队列；队列满返回 Err。

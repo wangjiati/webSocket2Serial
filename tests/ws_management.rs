@@ -54,6 +54,7 @@ struct App {
     serial: FakeTransport,
     sessions: Arc<Mutex<HashMap<String, Arc<Session>>>>,
     scanner: Arc<FakeScanner>,
+    factory: Arc<FakeTransportFactory>,
     /// 直接 `manager.attach` 拿到的收发通道，保持 rx 存活、会话维持 active。
     attached: Mutex<Vec<AttachedData>>,
 }
@@ -137,6 +138,7 @@ async fn test_app() -> App {
         serial,
         sessions,
         scanner,
+        factory: transport_factory,
         attached: Mutex::new(Vec::new()),
     }
 }
@@ -502,7 +504,8 @@ async fn slow_consumer_is_closed_with_1013_and_reconnect_lists_cleanly() {
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
 
-    // 触发状态事件：关闭会话 → session.state(closed) 遇满 → 1013 关闭管理连接。
+    // 触发关闭会话（session.state(closed) 事件会走同一广播）；写队列已被调试帧灌满，
+    // 任何帧（含状态事件）遇满都触发 1013 关闭管理连接。
     app.built
         .state
         .manager
@@ -516,4 +519,126 @@ async fn slow_consumer_is_closed_with_1013_and_reconnect_lists_cleanly() {
     let _hello = next_event(&mut ws2).await;
     let list = request(&mut ws2, "session.list", json!({})).await;
     assert_eq!(list["data"]["sessions"], json!([]));
+}
+
+#[tokio::test]
+async fn requests_are_served_during_debug_flood() {
+    let app = test_app().await;
+    let mut ws = connect_management(&app).await;
+    let _hello = next_event(&mut ws).await;
+    let open = request(&mut ws, "session.open", open_params()).await;
+    let id = open["data"]["sessionId"].as_str().unwrap().to_string();
+    app.attach(&id).await;
+    request(
+        &mut ws,
+        "debug.subscribe",
+        json!({"sessionIds":"all","replay":false}),
+    )
+    .await;
+
+    // 拆成 sink/stream：后台读任务持续 drain 事件，避免写队列满触发 1013。
+    let (mut sink, mut stream) = ws.split();
+    let list_id = "flood-list";
+    let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+    let drain = tokio::spawn(async move {
+        while let Some(Ok(msg)) = stream.next().await {
+            if let Message::Text(text) = msg {
+                if let Ok(v) = serde_json::from_str::<Value>(&text) {
+                    if v.get("id").and_then(Value::as_str) == Some(list_id) {
+                        let _ = resp_tx.send(v);
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    // 后台持续灌 TX 调试帧（洪峰），1ms 节流避免压垮 drain/写队列。
+    let manager = Arc::clone(&app.built.state.manager);
+    let flood_id = id.clone();
+    let flood = tokio::spawn(async move {
+        let payload = vec![0u8; 1024];
+        loop {
+            if manager.write(&flood_id, payload.clone()).await.is_err() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    });
+
+    // 洪峰进行中发 session.list，断言 2s 内得到响应（证明请求没被事件洪峰饿死）。
+    sink.send(Message::Text(
+        json!({"id": list_id, "action": "session.list", "params": {}}).to_string(),
+    ))
+    .await
+    .unwrap();
+    let response = tokio::time::timeout(Duration::from_secs(2), resp_rx)
+        .await
+        .expect("session.list 在 2s 内无响应（被事件洪峰饿死）")
+        .unwrap();
+    assert!(response["data"]["sessions"].is_array());
+
+    flood.abort();
+    drain.abort();
+}
+
+#[tokio::test]
+async fn broadcast_lag_closes_1013() {
+    let app = test_app().await;
+    let mut ws = connect_management(&app).await;
+    let _hello = next_event(&mut ws).await;
+    let open = request(&mut ws, "session.open", open_params()).await;
+    let id = open["data"]["sessionId"].as_str().unwrap().to_string();
+    app.attach(&id).await;
+    request(
+        &mut ws,
+        "debug.subscribe",
+        json!({"sessionIds":"all","replay":false}),
+    )
+    .await;
+
+    // 用闸门阻塞下一次 open：主循环将卡在 spawn_blocking，无法消费广播。
+    let mut gate = app.factory.gate_next_open();
+    ws.send(Message::Text(
+        json!({
+            "id":"lag-open","action":"session.open",
+            "params":{"path":"COM4","baudRate":115200,"dataBits":8,
+                      "parity":"none","stopBits":1,"flowControl":"none"}
+        })
+        .to_string(),
+    ))
+    .await
+    .unwrap();
+    gate.wait_started().await;
+
+    // 主循环被阻塞期间灌入 >16 条调试帧，使广播容量（16）溢出 → Lagged。
+    for _ in 0..40 {
+        app.serial.push_rx(b"x");
+    }
+    // 等读线程把 40 帧都读出（>16 已溢出）后再释放闸门。
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let rx_bytes = app
+            .built
+            .state
+            .manager
+            .list()
+            .await
+            .iter()
+            .find(|s| s.session_id == id)
+            .map(|s| s.counters.rx_bytes)
+            .unwrap_or(0);
+        if rx_bytes >= 40 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "rx 未读完：{rx_bytes}/40"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    gate.release();
+
+    // 主循环随后 recv 到 Lagged → 1013 关闭。
+    assert_eq!(close_code(&mut ws).await, 1013);
 }
