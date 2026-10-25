@@ -7,9 +7,118 @@
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
-    <main>
+    <header>
       <h1>WebSocket2Serial</h1>
-      <p>管理页占位。完整概览与串口助手见任务 13。</p>
+      <span id="conn-status" class="badge waiting">连接中…</span>
+    </header>
+
+    <main>
+      <section id="overview">
+        <h2>概览</h2>
+
+        <div class="info-grid">
+          <div class="info-item">
+            <span class="label">版本</span>
+            <span id="version">—</span>
+          </div>
+          <div class="info-item">
+            <span class="label">管理地址</span>
+            <code id="admin-url">—</code>
+            <button id="copy-url" type="button" class="small">复制</button>
+          </div>
+          <div class="info-item">
+            <label class="label">
+              <input type="checkbox" id="admin-toggle" />
+              管理服务
+            </label>
+            <span id="admin-note" class="muted"></span>
+          </div>
+        </div>
+
+        <h3>串口</h3>
+        <div id="ports" class="panel">
+          <table>
+            <thead>
+              <tr>
+                <th>路径</th>
+                <th>VID/PID</th>
+                <th>厂商</th>
+                <th>产品</th>
+                <th>序列号</th>
+                <th>类型</th>
+              </tr>
+            </thead>
+            <tbody id="ports-body"></tbody>
+          </table>
+        </div>
+
+        <h3>会话</h3>
+        <div id="sessions" class="panel">
+          <table>
+            <thead>
+              <tr>
+                <th>会话</th>
+                <th>状态</th>
+                <th>串口 / 参数</th>
+                <th>RX / TX</th>
+                <th>最近断线</th>
+                <th>最近错误</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="sessions-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="assistant">
+        <h2>串口助手</h2>
+
+        <div class="assistant-toolbar">
+          <label>
+            会话
+            <select id="session-select"></select>
+          </label>
+          <button id="pause" type="button">暂停</button>
+          <button id="clear" type="button">清空</button>
+          <label class="inline">
+            <input type="checkbox" id="autoscroll" checked />
+            自动滚动
+          </label>
+          <button id="export" type="button">导出</button>
+        </div>
+
+        <div id="buffer-note" class="buffer-note" hidden></div>
+
+        <div id="log" class="log" aria-label="调试日志"></div>
+
+        <div class="send-panel">
+          <div class="send-row">
+            <label class="inline">
+              <input type="radio" name="send-mode" value="hex" checked />
+              HEX
+            </label>
+            <label class="inline">
+              <input type="radio" name="send-mode" value="text" />
+              文本
+            </label>
+            <span class="muted write-hint" id="write-hint">
+              调试写与生产网页共用同一串口，写入会实际发送到设备。
+            </span>
+          </div>
+          <textarea id="send-input" rows="3" placeholder="发送内容（HEX 或文本）" disabled></textarea>
+          <div class="send-actions">
+            <label class="inline">
+              <input type="checkbox" id="allow-write" />
+              允许写入
+            </label>
+            <button id="send-btn" type="button" disabled>发送</button>
+            <span id="send-status" class="status"></span>
+          </div>
+        </div>
+      </section>
     </main>
+
+    <script type="module" src="/js/main.js"></script>
   </body>
 </html>

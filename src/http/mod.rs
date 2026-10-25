@@ -12,7 +12,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::{header, StatusCode};
 use axum::response::{Html, IntoResponse};
 use axum::routing::get;
@@ -25,10 +25,15 @@ use crate::app::AdminController;
 use crate::config::AdminConfig;
 use crate::protocol::AdminState;
 
-/// 内嵌的占位首页（完整 UI 见任务 13）。
+/// 内嵌的首页。
 const INDEX_HTML: &str = include_str!("../assets/index.html");
-/// 内嵌的占位样式。
+/// 内嵌的样式。
 const STYLE_CSS: &str = include_str!("../assets/style.css");
+/// 内嵌的 JS 模块（任务 13）。
+const JS_API: &str = include_str!("../assets/js/api.js");
+const JS_OVERVIEW: &str = include_str!("../assets/js/overview.js");
+const JS_ASSISTANT: &str = include_str!("../assets/js/assistant.js");
+const JS_MAIN: &str = include_str!("../assets/js/main.js");
 
 /// 管理页服务：可运行时开关的本地 HTTP 服务。
 pub struct AdminService {
@@ -216,7 +221,7 @@ fn build_router(management_port: u16, autostart: Arc<AtomicBool>, url: String) -
     Router::new()
         .route("/", get(index))
         .route("/style.css", get(style))
-        .route("/js/*path", get(js_not_found))
+        .route("/js/*path", get(js))
         .route("/api/config", get(config))
         .with_state(state)
 }
@@ -232,9 +237,16 @@ async fn style() -> impl IntoResponse {
     )
 }
 
-/// 任务 12 尚无 JS 资源；任务 13 提供真实脚本后替换为静态分发。
-async fn js_not_found() -> StatusCode {
-    StatusCode::NOT_FOUND
+/// 静态分发 `/js/*`：按文件名返回内嵌 JS 模块，未知路径 404。
+async fn js(Path(path): Path<String>) -> Result<impl IntoResponse, StatusCode> {
+    let (content_type, body): (&str, &'static str) = match path.as_str() {
+        "api.js" => ("text/javascript; charset=utf-8", JS_API),
+        "overview.js" => ("text/javascript; charset=utf-8", JS_OVERVIEW),
+        "assistant.js" => ("text/javascript; charset=utf-8", JS_ASSISTANT),
+        "main.js" => ("text/javascript; charset=utf-8", JS_MAIN),
+        _ => return Err(StatusCode::NOT_FOUND),
+    };
+    Ok(([(header::CONTENT_TYPE, content_type)], body))
 }
 
 async fn config(State(state): State<Arc<HttpState>>) -> Json<ConfigResponse> {
