@@ -14,8 +14,9 @@ use tokio_tungstenite::tungstenite::http;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 use websocket2serial::config::{OriginAllowlist, SessionConfig};
+use websocket2serial::protocol::SessionState;
 use websocket2serial::serial::TransportError;
-use websocket2serial::session::SessionManager;
+use websocket2serial::session::{CloseReason, SessionManager};
 use websocket2serial::ws::AxumDataListenerFactory;
 
 type Ws = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
@@ -27,9 +28,30 @@ struct App {
 }
 
 async fn test_app() -> App {
+    test_app_with_config(SessionConfig::default()).await
+}
+
+/// 指定宽限时长的测试应用（`grace_timeout_closes_session` 用 100ms 缩短宽限）。
+async fn test_app_with_grace(grace_ms: u64) -> App {
+    test_app_with_config(SessionConfig {
+        grace_ms,
+        ..SessionConfig::default()
+    })
+    .await
+}
+
+/// rx 通道容量最小的测试应用（背压用例：`rx_queue_bytes=4096` → 容量 1）。
+async fn test_app_with_rx_queue(rx_queue_bytes: usize) -> App {
+    test_app_with_config(SessionConfig {
+        rx_queue_bytes,
+        ..SessionConfig::default()
+    })
+    .await
+}
+
+async fn test_app_with_config(cfg: SessionConfig) -> App {
     let serial = FakeTransport::new();
     let transport_factory = Arc::new(FakeTransportFactory::with_transport(serial.clone()));
-    let cfg = SessionConfig::default();
     let origins = OriginAllowlist::new(&[
         "http://127.0.0.1:*".to_string(),
         "http://localhost:*".to_string(),
@@ -85,6 +107,22 @@ async fn open_active_data_ws() -> (Ws, String, App) {
     let url = open.data_url.clone();
     let ws = connect_data(&url).await.unwrap();
     (ws, url, app)
+}
+
+/// 短轮询等待会话进入指定状态（用 `session.list` 而非固定 sleep，避免时序竞态）。
+async fn wait_state(app: &App, expected: SessionState) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let current = app.manager.list().await.first().map(|i| i.state);
+        if current == Some(expected) {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "等待状态 {expected:?} 超时"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
 }
 
 #[tokio::test]
@@ -192,4 +230,117 @@ async fn tx_flood_preserves_order_and_completeness() {
         );
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
+}
+
+#[tokio::test]
+async fn abnormal_drop_enters_grace_and_reattach_reports_gap() {
+    let app = test_app().await;
+    let open = app.manager.open(sample_open("COM3")).await.unwrap();
+    let url = open.data_url.clone();
+    let mut ws = connect_data(&url).await.unwrap();
+
+    app.serial.push_rx(b"a");
+    assert_eq!(next_binary(&mut ws).await, b"a");
+
+    drop(ws); // 非 1000 断开 → 进入宽限
+    wait_state(&app, SessionState::Grace).await;
+
+    app.serial.push_rx(b"b"); // 宽限内读到但丢弃
+    app.serial.push_rx(b"c");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let discarded = app.manager.list().await[0].counters.rx_discarded_bytes;
+        if discarded >= 2 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "宽限丢弃计数未增长：{discarded}"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+
+    // 重连旧 dataUrl：resume 并写入 lastGap。
+    let mut ws2 = connect_data(&url).await.unwrap();
+    let state = loop {
+        let state = app.manager.list().await[0].clone();
+        if state.last_gap.is_some() {
+            break state;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "last_gap 未写入");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
+    let gap = state.last_gap.unwrap();
+    assert_eq!(gap.discarded_bytes, 2);
+    assert!(gap.resumed);
+
+    // 重连后只收新数据，不收宽限期的积压旧数据。
+    app.serial.push_rx(b"d");
+    assert_eq!(next_binary(&mut ws2).await, b"d");
+}
+
+#[tokio::test]
+async fn grace_timeout_closes_session() {
+    let app = test_app_with_grace(100).await;
+    let open = app.manager.open(sample_open("COM3")).await.unwrap();
+    let ws = connect_data(&open.data_url).await.unwrap();
+    drop(ws); // 非 1000 断开 → 进入宽限
+
+    wait_state(&app, SessionState::Grace).await;
+
+    // 100ms 宽限超时后会话销毁、端口释放。
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while !app.manager.list().await.is_empty() {
+        assert!(tokio::time::Instant::now() < deadline, "宽限超时未销毁会话");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    // `list()` 先变空，端口锁随后释放：轮询 reopen 直至成功。
+    let again = loop {
+        match app.manager.open(sample_open("COM3")).await {
+            Ok(again) => break again,
+            Err(websocket2serial::session::ManagerError::PortBusy) => {
+                assert!(tokio::time::Instant::now() < deadline, "宽限超时未释放端口");
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            Err(other) => panic!("意外错误: {other:?}"),
+        }
+    };
+    assert!(!again.reused);
+}
+
+#[tokio::test]
+async fn admin_close_sends_4004() {
+    let (mut ws, _url, app) = open_active_data_ws().await;
+    let id = app.manager.list().await[0].session_id.clone();
+    app.manager
+        .close(&id, CloseReason::AdminClosed)
+        .await
+        .unwrap();
+    assert_eq!(close_code(&mut ws).await, 4004);
+}
+
+#[tokio::test]
+async fn write_stall_sends_4007() {
+    let (mut ws, _url, app) = open_active_data_ws().await;
+    app.serial.fail_next_write(TransportError::WriteTimeout);
+    ws.send(Message::Binary(b"x".to_vec())).await.unwrap();
+    assert_eq!(close_code(&mut ws).await, 4007);
+}
+
+#[tokio::test]
+async fn backpressure_sends_4005() {
+    let app = test_app_with_rx_queue(4096).await;
+    let open = app.manager.open(sample_open("COM3")).await.unwrap();
+    let mut ws = connect_data(&open.data_url).await.unwrap();
+    wait_state(&app, SessionState::Active).await;
+
+    // 同步灌入：主线程不 yield，数据循环无法排空 rx 通道(容量 1)；
+    // 读线程读到第二块时 try_send 遇满，触发背压 4005。
+    for _ in 0..10 {
+        app.serial.push_rx(&[0u8; 4096]);
+    }
+    // 阻塞主线程一小段，让读线程在没有数据循环竞争的情况下完成两次读取。
+    std::thread::sleep(Duration::from_millis(50));
+
+    assert_eq!(close_code(&mut ws).await, 4005);
 }
