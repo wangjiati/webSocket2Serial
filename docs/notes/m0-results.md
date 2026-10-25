@@ -3,7 +3,7 @@
 - 日期：2026-10-25
 - 执行者：自动化子代理（无 Win7 虚拟机 / Ubuntu 18.04 / 物理 USB 转串口）
 - 执行机器：Windows 11（本机），Rust 默认 1.97.1，另装 1.77.2
-- 结论摘要：**Rust 1.77.2 可构建 Windows x64 静态 CRT 可执行文件，且无需额外 VC 运行库（无 vcruntime140 / api-ms-win-crt 依赖）；托盘 + 气泡、最小 WS 回显在本机 Windows 11 上可启动并跑通。** 但计划中的依赖写法（`tokio = "1.38"` 等 caret 版本）会解析到要求 rustc 1.85 的新版本，必须锁定精确版本。Win7 实机、写超时实测、Chrome 109、Ubuntu 18.04、115200 延迟均无法在本环境执行，标记为 BLOCKED / 待人工。
+- 结论摘要：**Rust 1.77.2 可构建 Windows x64 静态 CRT 可执行文件，且无需额外 VC 运行库（无 vcruntime140 / api-ms-win-crt 依赖）；托盘 + 气泡、最小 WS 回显在本机 Windows 11 上可启动并跑通。** 但计划中的依赖写法（`tokio = "1.38"` 等 caret 版本）会解析到要求 rustc 1.85 的新版本，必须锁定精确版本。Win7 实机、写超时实测、Chrome 109、Ubuntu 18.04、115200 延迟均无法在本环境执行，标记为 BLOCKED / 待人工（其中 115200 延迟还需任务 1/M2 真实实现内置计时后才能测）。
 
 ---
 
@@ -17,7 +17,7 @@
 | 写超时方案 | ⚠️ 代码审查确认，实测 BLOCKED | Windows 走 `WriteTotalTimeoutConstant`，Linux 走 `ppoll(POLLOUT)`；无串口硬件无法实测 |
 | 127.0.0.1 vs localhost | ✅ 已实测 | `localhost` 先解析 `::1`（IPv6），依赖客户端回退；应统一用 `127.0.0.1` |
 | Ubuntu 18.04 构建 | ⏸️ BLOCKED（无环境） | 命令清单见 §6 |
-| 115200 内部延迟 | ⏸️ BLOCKED（无硬件） | 人工步骤见 §7 |
+| 115200 内部延迟 | ⏸️ BLOCKED（无硬件 + spike 无计时仪器） | 顺延到任务 1/M2 真实实现内置计时后再测（§7） |
 
 ---
 
@@ -237,13 +237,19 @@ SERIAL_PORT=/dev/pts/0 SERIAL_BAUD=115200 ./spike/target/release/spike &
 
 ---
 
-## 7. 115200 内部延迟（BLOCKED，人工步骤）
+## 7. 115200 内部延迟（BLOCKED；当前 spike 无计时仪器）
 
-无 USB 转串口硬件，无法执行。人工步骤：
-1. USB 转串口 TX-RX 短接（或两只互连），记录芯片型号、驱动、latency timer。
-2. spike 打开 `SERIAL_PORT`（桥接模式），WS 客户端连 `127.0.0.1:8765/ws`。
-3. 连续发送带时间戳的字节流，跑 5 分钟；在 spike 内记录「串口 read 返回 → WS send」与「WS 收到 → 串口 write 返回」的时间差。
-4. 统计 p50/p99。目标：工具内部 p99 ≤ 5ms；端到端 115200 回环 p99 ≤ 25ms（观察指标）。921600 视硬件选做。
+无 USB 转串口硬件，无法执行。**并且当前 spike 不具备延迟测量能力**：§2 描述的 spike 日志只有字节数 + 十六进制预览（`ws rx / serial tx / serial rx ...`），没有时间戳，也没有「串口 read 返回 → WS send」「WS 收到 → 串口 write 返回」两处计时埋点；spike 是一次性代码，已 gitignore、未提交、不进入产品。
+
+因此「记录时间差」这一人工步骤**无法对当前 spike 照做**。延迟验收改由后续真实实现承载：
+
+- **任务 1/M2 的真实实现必须内置两处计时**：「串口 read 返回 → WS send」与「WS 收到 → 串口 write 返回」，并把每段耗时（p50/p99）作为可观测指标输出。具备该仪器后，再执行以下人工步骤：
+  1. USB 转串口 TX-RX 短接（或两只互连），记录芯片型号、驱动、latency timer。
+  2. 真实实现打开串口（桥接模式），WS 客户端连数据 WS。
+  3. 连续发送带时间戳的字节流，跑 5 分钟，读取实现内置的两段耗时。
+  4. 统计 p50/p99。目标：工具内部 p99 ≤ 5ms；端到端 115200 回环 p99 ≤ 25ms（观察指标）。921600 视硬件选做。
+
+> M0 的延迟目标因此**不在 spike 内验证**，顺延到真实实现就绪后再做；本任务只确认技术栈与平台可行性，不产生延迟数据。
 
 ---
 
@@ -254,7 +260,7 @@ SERIAL_PORT=/dev/pts/0 SERIAL_BAUD=115200 ./spike/target/release/spike &
 - [ ] Win7：Chrome 109 / Firefox 115 ESR 分别测 `ws://127.0.0.1` 与 `ws://localhost`。
 - [ ] Win7 / Linux：写停滞（设备不读或流控阻塞）在设定超时后返回 `TimedOut`（§4.4）。
 - [ ] Ubuntu 18.04：按 §6 构建并跑通 PTY + WS 回显。
-- [ ] 物理 USB 转串口 TX-RX 回环：115200 延迟 p50/p99（§7）。
+- [ ] （任务 1/M2 真实实现内置计时后）物理 USB 转串口 TX-RX 回环：115200 延迟 p50/p99（§7）。
 
 ---
 
