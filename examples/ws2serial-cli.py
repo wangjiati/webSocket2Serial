@@ -12,8 +12,11 @@
 说明：
   - 固定使用 127.0.0.1（不用 localhost）。
   - 管理动作走管理 WS，数据收发走二进制数据 WS，不自行实现串口。
-  - 默认（双向）在 stdin 读到 EOF 后停止发送，并以 1000 正常关闭数据连接，
-    串口随之释放；`--listen` 只收不发，运行到 Ctrl-C 或对端关闭。
+  - 双向模式在 stdin 读到 EOF 后停止发送，并继续接收 `--linger-ms`（默认 1000ms）
+    以收齐设备回传，随后以 1000 正常关闭数据连接、释放串口；`--linger-ms 0`
+    表示 EOF 后立即结束。`--listen` 只收不发，运行到 Ctrl-C 或对端关闭。
+  - 因此上面的双向示例 `... < in.bin > out.bin` 会在发完后额外等约 1s 收设备回传，
+    需要更长窗口可调 `--linger-ms`。
   - `--hex` 时：stdin 按空白/逗号分隔的十六进制字节解析后写入串口，
     stdout 把收到的字节按大写十六进制打印。
 """
@@ -74,19 +77,25 @@ def parse_hex(text: str) -> bytes:
 
 async def _request(ws, action: str, params: dict):
     """在管理 WS 上发请求并等待对应应答（跳过 hello 等事件）。"""
+    _, ConnectionClosed = _import_websockets()
     req_id = _next_id()
-    await ws.send(json.dumps({"id": req_id, "action": action, "params": params}))
-    while True:
-        raw = await ws.recv()
-        if isinstance(raw, (bytes, bytearray)):
-            raw = bytes(raw).decode("utf-8", "replace")
-        msg = json.loads(raw)
-        if msg.get("id") == req_id:
-            if msg.get("ok"):
-                return msg.get("data") or {}
-            error = msg.get("error") or {}
-            raise CliError(f"{error.get('code', 'UNKNOWN')}: {error.get('message', '未知错误')}")
-        # 非本请求的帧（事件）忽略。
+    try:
+        await ws.send(json.dumps({"id": req_id, "action": action, "params": params}))
+        while True:
+            raw = await ws.recv()
+            if isinstance(raw, (bytes, bytearray)):
+                raw = bytes(raw).decode("utf-8", "replace")
+            msg = json.loads(raw)
+            if msg.get("id") == req_id:
+                if msg.get("ok"):
+                    return msg.get("data") or {}
+                error = msg.get("error") or {}
+                raise CliError(
+                    f"{error.get('code', 'UNKNOWN')}: {error.get('message', '未知错误')}"
+                )
+            # 非本请求的帧（事件）忽略。
+    except ConnectionClosed as exc:
+        raise CliError(f"管理连接已关闭（{action}）") from exc
 
 
 async def _list_ports(args) -> None:
@@ -150,21 +159,41 @@ async def _send_loop(data, args, loop) -> None:
 async def _passthrough(data, args) -> None:
     loop = asyncio.get_running_loop()
     recv_task = asyncio.create_task(_recv_loop(data, args))
-    send_task = None if args.listen else asyncio.create_task(_send_loop(data, args, loop))
 
-    tasks = [recv_task] + ([send_task] if send_task else [])
-    try:
-        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-    finally:
-        for task in pending:
-            task.cancel()
-        for task in pending:
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
-    for task in done:
-        exc = task.exception()
-        if exc is not None:
-            raise exc
+    if args.listen:
+        # 只收不发：运行到对端关闭或 Ctrl-C。
+        await recv_task
+        return
+
+    send_task = asyncio.create_task(_send_loop(data, args, loop))
+    # 双向：等发送结束（stdin EOF）或数据连接关闭，以先到者为准。
+    done, _pending = await asyncio.wait(
+        [recv_task, send_task], return_when=asyncio.FIRST_COMPLETED
+    )
+
+    if send_task in done:
+        # stdin EOF：留 linger_ms 继续收设备回传；对端关闭则立即结束。
+        if args.linger_ms > 0:
+            try:
+                await asyncio.wait_for(recv_task, timeout=args.linger_ms / 1000.0)
+            except asyncio.TimeoutError:
+                recv_task.cancel()
+        else:
+            recv_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await recv_task
+    else:
+        # 数据连接已关闭：停止发送并结束。
+        send_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await send_task
+
+    # 传播任务异常（如数据连接异常关闭）。
+    for task in (send_task, recv_task):
+        if task.done() and not task.cancelled():
+            exc = task.exception()
+            if exc is not None:
+                raise exc
 
 
 async def _run(args, state: dict) -> None:
@@ -235,6 +264,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--listen",
         action="store_true",
         help="只收不发：仅把串口数据转存到 stdout，不读取 stdin",
+    )
+    parser.add_argument(
+        "--linger-ms",
+        type=int,
+        default=1000,
+        help="双向模式 stdin EOF 后继续接收设备回传的毫秒数（默认 1000；0 表示立即结束）",
     )
     parser.add_argument(
         "--list",

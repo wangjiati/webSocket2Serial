@@ -95,9 +95,15 @@ fn client_js_parses_with_node() {
 }
 
 /// 在 PATH 中查找首个可执行命令，找不到返回 `None`。
+///
+/// 只有 `--version` 实际成功退出（`status.success()`）才算找到，避免把
+/// Windows Store 的 python 占位 stub（能启动但非零退出）误判为可用。
 fn find_command(candidates: &[&str]) -> Option<String> {
-    candidates
-        .iter()
-        .map(|c| c.to_string())
-        .find(|c| Command::new(c).arg("--version").output().is_ok())
+    candidates.iter().map(|c| c.to_string()).find(|c| {
+        Command::new(c)
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    })
 }
