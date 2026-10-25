@@ -25,7 +25,10 @@ tokio = { version = "=1.38.0", features = [
 ] }
 axum = { version = "0.7", features = ["ws"] }
 serialport = "4.5"
-hyper-util = "=0.1.20"
+# 数据/管理 WS 服务：`hyper` 用于 `Incoming` 请求体类型，`hyper-util` 的
+# `server`/`http1`/`tokio` 用于 `serve_with_nodelay` 的自定义 accept + 升级。
+hyper = "1"
+hyper-util = { version = "=0.1.20", features = ["tokio", "server", "http1", "service"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "=0.8.19"
