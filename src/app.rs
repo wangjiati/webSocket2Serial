@@ -28,7 +28,9 @@ pub struct AppState {
 /// 管理页服务控制。
 ///
 /// 对象安全：无泛型、无 `async`、无 `Self` 返回。`set_enabled` 采用同步绑定
-/// `std::net::TcpListener`（开销小）后 spawn 服务任务的方式，任务 12 实现真实版。
+/// `std::net::TcpListener`（开销小）后 spawn 服务任务的方式；真实实现见
+/// [`crate::http::AdminService`]，测试用 fake 见 `tests/common` 的
+/// `FakeAdminController`。
 pub trait AdminController: Send + Sync {
     fn status(&self) -> AdminState;
     fn set_enabled(&self, enabled: bool) -> AdminState;
