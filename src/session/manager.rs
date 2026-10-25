@@ -331,6 +331,14 @@ impl SessionManager {
             .copied()
     }
 
+    /// 回放某会话的调试环形缓冲（按插入顺序）；会话不存在返回 `None`。
+    pub fn debug_snapshot(&self, session_id: &str) -> Option<Vec<crate::protocol::DebugFrame>> {
+        let sessions = self.inner.shared.sessions.lock().unwrap();
+        sessions
+            .get(session_id)
+            .map(|session| session.debug_snapshot())
+    }
+
     /// 校验 token 并把会话切到 active，返回数据 WS 收发通道。
     pub async fn attach(&self, session_id: &str, token: &str) -> Result<AttachedData, AttachError> {
         let shared = Arc::clone(&self.inner.shared);

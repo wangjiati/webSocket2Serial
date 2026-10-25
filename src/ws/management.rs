@@ -1,12 +1,15 @@
-//! 管理面 WebSocket：Origin 校验、`hello` 首帧、7 个 action 分发与响应队列。
+//! 管理面 WebSocket：Origin 校验、`hello` 首帧、7 个 action 分发与事件广播。
 //!
 //! 路由 `GET /ws`：握手校验 Origin 白名单（失败 403），升级后立即推送 `hello`。
-//! 每个连接一个写任务从 `mpsc::channel(256)` 取文本帧写 sink；响应用 `try_send`，
-//! 队列满则发 1013 关闭；一个读循环解析 [`Request`] 并按 action 分发，应答带相同 `id`。
-//! 状态/端口/管理/调试事件（任务 11）与心跳（任务 11）后续接入。
+//! 每个连接一个写任务从 `mpsc::channel(256)` 取文本帧写 sink；主循环把应答与
+//! 广播事件统一排队：响应用 `try_send`，队列满则发 1013 关闭。`session.state`/
+//! `ports.changed`/`admin.state` 始终转发（满 → 1013）；`debug.frame` 只转发给
+//! 订阅集且满则静默丢弃（靠 `seq` 缺口提示）。心跳每 5s 发 Ping，10s 无 Pong 判死。
 
 use std::borrow::Cow;
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::http::{HeaderMap, StatusCode};
@@ -23,11 +26,12 @@ use tokio::sync::{mpsc, oneshot, watch};
 use crate::app::AppState;
 use crate::config::OriginAllowlist;
 use crate::protocol::{
-    ActionName, AdminSetParams, CloseParams, CloseResult, DebugSubscribeParams,
+    ActionName, AdminSetParams, CloseParams, CloseResult, DebugFrameData, DebugSubscribeParams,
     DebugSubscribeResult, ErrorBody, ErrorCode, Event, HelloData, OpenParams, PortsListResult,
     Request, Response, SessionListResult, SessionSelector, WriteParams, WriteResult,
 };
 use crate::session::{CloseReason, ManagerError};
+use crate::ws::heartbeat::Heartbeat;
 
 use super::serve_with_nodelay;
 
@@ -35,6 +39,47 @@ use super::serve_with_nodelay;
 const WRITE_QUEUE: usize = 256;
 /// `session.write` 单次数据上限（64 KiB）。
 const WRITE_MAX_BYTES: usize = 64 * 1024;
+/// 心跳 Ping 间隔。
+const HEARTBEAT_PING: Duration = Duration::from_secs(5);
+/// 无 Pong 判死阈值。
+const HEARTBEAT_DEAD: Duration = Duration::from_secs(10);
+
+/// 单个管理连接的调试订阅状态（主循环的读/事件转发共享）。
+struct Subscription {
+    selector: SessionSelector,
+    /// 各会话已转发帧的最大 seq，用于回放与实时帧去重。
+    seen: HashMap<String, u64>,
+}
+
+impl Default for Subscription {
+    fn default() -> Self {
+        Self {
+            selector: SessionSelector::Ids(Vec::new()),
+            seen: HashMap::new(),
+        }
+    }
+}
+
+impl Subscription {
+    /// 会话是否在当前订阅集内。
+    fn contains(&self, session_id: &str) -> bool {
+        match &self.selector {
+            SessionSelector::All => true,
+            SessionSelector::Ids(ids) => ids.iter().any(|id| id == session_id),
+        }
+    }
+
+    /// seq 去重：首次或更大 seq 返回 `true` 并记录；重复/回退返回 `false`。
+    fn track(&mut self, session_id: &str, seq: u64) -> bool {
+        match self.seen.get(session_id) {
+            Some(&last) if seq <= last => false,
+            _ => {
+                self.seen.insert(session_id.to_string(), seq);
+                true
+            }
+        }
+    }
+}
 
 /// 管理 WS 路由状态。
 struct WsState {
@@ -87,7 +132,7 @@ async fn upgrade_management(
         .into_response()
 }
 
-/// 管理连接主循环：`hello` → 写任务 + 读循环。
+/// 管理连接主循环：`hello` → 写任务 + 请求分发 + 事件转发 + 心跳。
 async fn run_management_loop(app: Arc<AppState>, socket: WebSocket) {
     let (mut sender, mut receiver) = socket.split();
 
@@ -100,6 +145,9 @@ async fn run_management_loop(app: Arc<AppState>, socket: WebSocket) {
 
     let (tx, mut rx) = mpsc::channel::<Message>(WRITE_QUEUE);
     let (close_tx, mut close_rx) = watch::channel::<Option<u16>>(None);
+
+    let subscription = Arc::new(Mutex::new(Subscription::default()));
+    let mut event_rx = app.events.subscribe();
 
     // 写任务：从队列取帧写 sink；收到关闭信号时发对应 close code。
     let writer = tokio::spawn(async move {
@@ -127,41 +175,74 @@ async fn run_management_loop(app: Arc<AppState>, socket: WebSocket) {
         }
     });
 
-    // debug.subscribe 的本连接订阅集（任务 11 据此推调试帧）。
-    let mut subscription = SessionSelector::Ids(Vec::new());
+    // 心跳：连接建立即视为一次 Pong，此后每 5s 发 Ping，10s 无 Pong 判死。
+    let mut heartbeat = Heartbeat::new(HEARTBEAT_PING, HEARTBEAT_DEAD);
+    heartbeat.on_pong(Instant::now());
+    let mut ping_tick =
+        tokio::time::interval_at(tokio::time::Instant::now() + HEARTBEAT_PING, HEARTBEAT_PING);
 
     loop {
-        match receiver.next().await {
-            Some(Ok(Message::Text(text))) => match serde_json::from_str::<Request>(&text) {
-                Ok(request) => {
-                    let response = dispatch(&app, &mut subscription, request).await;
-                    if enqueue(&tx, response).is_err() {
-                        let _ = close_tx.send(Some(1013));
+        tokio::select! {
+            biased;
+            event = event_rx.recv() => {
+                match event {
+                    Ok(event) => forward_event(&subscription, &tx, &close_tx, event),
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        tracing::debug!("管理事件广播落后，跳过一批");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+            incoming = receiver.next() => {
+                match incoming {
+                    Some(Ok(Message::Text(text))) => match serde_json::from_str::<Request>(&text) {
+                        Ok(request) => {
+                            let (response, replay) = dispatch(&app, &subscription, request).await;
+                            if enqueue(&tx, response).is_err() {
+                                let _ = close_tx.send(Some(1013));
+                                break;
+                            }
+                            // 回放帧在 response 之后排队；满则丢（不挤掉状态事件）。
+                            for message in replay {
+                                let _ = tx.try_send(message);
+                            }
+                        }
+                        Err(_) => {
+                            let response = Response {
+                                id: String::new(),
+                                ok: false,
+                                data: None,
+                                error: Some(ErrorBody::new(ErrorCode::InvalidRequest, "请求格式错误")),
+                            };
+                            if enqueue(&tx, response).is_err() {
+                                let _ = close_tx.send(Some(1013));
+                                break;
+                            }
+                        }
+                    },
+                    Some(Ok(Message::Ping(payload))) => {
+                        let _ = tx.try_send(Message::Pong(payload));
+                    }
+                    Some(Ok(Message::Pong(_))) => {
+                        heartbeat.on_pong(Instant::now());
+                    }
+                    Some(Ok(Message::Close(_))) => {
+                        let _ = close_tx.send(Some(1000));
                         break;
                     }
+                    Some(Ok(_)) => {}
+                    Some(Err(_)) | None => break,
                 }
-                Err(_) => {
-                    let response = Response {
-                        id: String::new(),
-                        ok: false,
-                        data: None,
-                        error: Some(ErrorBody::new(ErrorCode::InvalidRequest, "请求格式错误")),
-                    };
-                    if enqueue(&tx, response).is_err() {
-                        let _ = close_tx.send(Some(1013));
-                        break;
-                    }
+            }
+            _ = ping_tick.tick() => {
+                let now = Instant::now();
+                if heartbeat.is_dead(now) {
+                    // 心跳超时：强制关闭该管理连接。
+                    let _ = close_tx.send(Some(1001));
+                    break;
                 }
-            },
-            Some(Ok(Message::Ping(payload))) => {
-                let _ = tx.try_send(Message::Pong(payload));
+                let _ = tx.try_send(Message::Ping(Vec::new()));
             }
-            Some(Ok(Message::Close(_))) => {
-                let _ = close_tx.send(Some(1000));
-                break;
-            }
-            Some(Ok(_)) => {}
-            Some(Err(_)) | None => break,
         }
     }
 
@@ -170,29 +251,65 @@ async fn run_management_loop(app: Arc<AppState>, socket: WebSocket) {
     drop(writer);
 }
 
+/// 把一条广播事件转发到管理连接写队列。
+///
+/// `session.state`/`ports.changed`/`admin.state` 始终转发，队列满 → 1013；
+/// `debug.frame` 只转发给订阅集且 seq 去重，队列满 → 静默丢弃（靠 seq 缺口提示）。
+fn forward_event(
+    subscription: &Mutex<Subscription>,
+    tx: &mpsc::Sender<Message>,
+    close_tx: &watch::Sender<Option<u16>>,
+    event: Event,
+) {
+    let drop_on_full = match &event {
+        Event::DebugFrame(data) => {
+            let mut sub = subscription.lock().unwrap();
+            if !sub.contains(&data.session_id) || !sub.track(&data.session_id, data.frame.seq) {
+                return;
+            }
+            true
+        }
+        _ => false,
+    };
+    let Ok(json) = serde_json::to_string(&event) else {
+        return;
+    };
+    if tx.try_send(Message::Text(json)).is_err() && !drop_on_full {
+        let _ = close_tx.send(Some(1013));
+    }
+}
+
 /// 把应答序列化后 `try_send` 进写队列；队列满返回 Err。
 fn enqueue(tx: &mpsc::Sender<Message>, response: Response) -> Result<(), ()> {
     let json = serde_json::to_string(&response).map_err(|_| ())?;
     tx.try_send(Message::Text(json)).map_err(|_| ())
 }
 
-/// 按 action 分发到各处理器；错误统一为 [`ErrorBody`]。
+/// 按 action 分发到各处理器；返回应答与需在应答之后排队的回放帧。
 async fn dispatch(
     app: &AppState,
-    subscription: &mut SessionSelector,
+    subscription: &Arc<Mutex<Subscription>>,
     request: Request,
-) -> Response {
-    let result: Result<Value, ErrorBody> = match request.action {
-        ActionName::PortsList => ports_list(app).await,
-        ActionName::SessionOpen => session_open(app, &request.params).await,
-        ActionName::SessionClose => session_close(app, &request.params).await,
-        ActionName::SessionList => session_list(app).await,
-        ActionName::SessionWrite => session_write(app, &request.params).await,
-        ActionName::DebugSubscribe => debug_subscribe(app, subscription, &request.params).await,
-        ActionName::AdminSet => admin_set(app, &request.params).await,
-        ActionName::Unknown => Err(ErrorBody::new(ErrorCode::UnknownAction, "未知 action")),
+) -> (Response, Vec<Message>) {
+    let (result, replay): (Result<Value, ErrorBody>, Vec<Message>) = match request.action {
+        ActionName::PortsList => (ports_list(app).await, Vec::new()),
+        ActionName::SessionOpen => (session_open(app, &request.params).await, Vec::new()),
+        ActionName::SessionClose => (session_close(app, &request.params).await, Vec::new()),
+        ActionName::SessionList => (session_list(app).await, Vec::new()),
+        ActionName::SessionWrite => (session_write(app, &request.params).await, Vec::new()),
+        ActionName::DebugSubscribe => {
+            match debug_subscribe(app, subscription, &request.params).await {
+                Ok((value, frames)) => (Ok(value), frames),
+                Err(error) => (Err(error), Vec::new()),
+            }
+        }
+        ActionName::AdminSet => (admin_set(app, &request.params).await, Vec::new()),
+        ActionName::Unknown => (
+            Err(ErrorBody::new(ErrorCode::UnknownAction, "未知 action")),
+            Vec::new(),
+        ),
     };
-    match result {
+    let response = match result {
         Ok(data) => Response {
             id: request.id,
             ok: true,
@@ -205,7 +322,8 @@ async fn dispatch(
             data: None,
             error: Some(error),
         },
-    }
+    };
+    (response, replay)
 }
 
 /// `hello` 事件数据。
@@ -274,12 +392,15 @@ async fn session_write(app: &AppState, params: &Value) -> Result<Value, ErrorBod
     to_value(WriteResult { written })
 }
 
-/// `debug.subscribe`：记录本连接订阅集并返回当前已订阅会话（任务 11 推帧）。
+/// `debug.subscribe`：更新订阅集，`replay:true` 时回放环形缓冲（seq 去重）。
+///
+/// 回放帧不在此处入队，而是随返回一并交给调用方，在应答之后排队，避免回放
+/// 帧抢先于应答、也避免与实时帧乱序。
 async fn debug_subscribe(
     app: &AppState,
-    subscription: &mut SessionSelector,
+    subscription: &Arc<Mutex<Subscription>>,
     params: &Value,
-) -> Result<Value, ErrorBody> {
+) -> Result<(Value, Vec<Message>), ErrorBody> {
     let params: DebugSubscribeParams = parse_params(params)?;
     let existing = app.manager.list().await;
     let subscribed: Vec<String> = match &params.session_ids {
@@ -290,14 +411,41 @@ async fn debug_subscribe(
             .cloned()
             .collect(),
     };
-    *subscription = params.session_ids;
-    to_value(DebugSubscribeResult { subscribed })
+
+    let mut replay = Vec::new();
+    {
+        let mut sub = subscription.lock().unwrap();
+        sub.selector = params.session_ids.clone();
+        if params.replay {
+            for id in &subscribed {
+                if let Some(frames) = app.manager.debug_snapshot(id) {
+                    for frame in frames {
+                        if !sub.track(id, frame.seq) {
+                            continue;
+                        }
+                        let data = DebugFrameData {
+                            session_id: id.clone(),
+                            frame: frame.with_replay(true),
+                        };
+                        if let Ok(json) = serde_json::to_string(&Event::DebugFrame(data)) {
+                            replay.push(Message::Text(json));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let value = to_value(DebugSubscribeResult { subscribed })?;
+    Ok((value, replay))
 }
 
-/// `admin.set`：运行时开关管理页服务（不回写配置）。
+/// `admin.set`：运行时开关管理页服务（不回写配置），并广播 `admin.state`。
 async fn admin_set(app: &AppState, params: &Value) -> Result<Value, ErrorBody> {
     let params: AdminSetParams = parse_params(params)?;
-    to_value(app.admin.set_enabled(params.enabled))
+    let state = app.admin.set_enabled(params.enabled);
+    let _ = app.events.send(Event::AdminState(state.clone()));
+    to_value(state)
 }
 
 /// 把 params 反序列化为目标类型；失败返回 [`ErrorCode::InvalidParams`]。

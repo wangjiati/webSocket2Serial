@@ -5,6 +5,7 @@
 pub mod app;
 pub mod cli;
 pub mod config;
+pub mod hotplug;
 pub mod logging;
 pub mod paths;
 pub mod protocol;

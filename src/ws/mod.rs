@@ -6,6 +6,7 @@
 //! - [`management`]：管理面 WebSocket 的 Origin 校验、`hello`、7 个 action 分发。
 
 pub mod data;
+pub mod heartbeat;
 pub mod management;
 
 use axum::Router;

@@ -11,6 +11,7 @@
 
 use std::borrow::Cow;
 use std::sync::{Arc, Weak};
+use std::time::{Duration, Instant};
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::extract::Path;
@@ -27,8 +28,14 @@ use crate::session::{
     AttachError, CloseReason, DataError, DataListenerFactory, DataListenerHandle, Session,
     SessionManager,
 };
+use crate::ws::heartbeat::Heartbeat;
 
 use super::serve_with_nodelay;
+
+/// 心跳 Ping 间隔。
+const HEARTBEAT_PING: Duration = Duration::from_secs(5);
+/// 无 Pong 判死阈值。
+const HEARTBEAT_DEAD: Duration = Duration::from_secs(10);
 
 /// 数据 WS 单监听器的共享状态（随服务任务存活）。
 struct WsState {
@@ -177,6 +184,12 @@ async fn run_data_loop(
 
     let (mut sender, mut receiver) = socket.split();
 
+    // 心跳：连接建立即视为一次 Pong，此后每 5s 发 Ping，10s 无 Pong 判死。
+    let mut heartbeat = Heartbeat::new(HEARTBEAT_PING, HEARTBEAT_DEAD);
+    heartbeat.on_pong(Instant::now());
+    let mut ping_tick =
+        tokio::time::interval_at(tokio::time::Instant::now() + HEARTBEAT_PING, HEARTBEAT_PING);
+
     loop {
         tokio::select! {
             incoming = receiver.next() => {
@@ -212,7 +225,9 @@ async fn run_data_loop(
                     Some(Ok(Message::Ping(payload))) => {
                         let _ = sender.send(Message::Pong(payload)).await;
                     }
-                    Some(Ok(Message::Pong(_))) => {}
+                    Some(Ok(Message::Pong(_))) => {
+                        heartbeat.on_pong(Instant::now());
+                    }
                     Some(Ok(Message::Close(frame))) => {
                         // 无 code 或 1000 视为正常关闭；其余视为异常断开。
                         let normal = frame.as_ref().map(|f| f.code == 1000).unwrap_or(true);
@@ -262,6 +277,16 @@ async fn run_data_loop(
                 // 会话因设备掉线/写停滞/背压/管理关闭而关闭：发对应 close code 后退出。
                 send_session_close(&mut sender, &state.session).await;
                 return;
+            }
+            _ = ping_tick.tick() => {
+                let now = Instant::now();
+                if heartbeat.is_dead(now) {
+                    // 心跳超时：按异常断开进入宽限（数据连接走 4001/grace）。
+                    state.session.return_rx(rx);
+                    let _ = manager.enter_grace(&session_id).await;
+                    return;
+                }
+                let _ = sender.send(Message::Ping(Vec::new())).await;
             }
         }
     }

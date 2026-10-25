@@ -9,6 +9,7 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, oneshot};
 
 use crate::config::Config;
+use crate::hotplug::{Hotplug, POLL_INTERVAL};
 use crate::protocol::{AdminState, Event};
 use crate::serial::PortScanner;
 use crate::session::SessionManager;
@@ -20,6 +21,7 @@ pub struct AppState {
     pub admin: Arc<dyn AdminController>,
     pub scanner: Arc<dyn PortScanner>,
     pub events: broadcast::Sender<Event>,
+    pub hotplug: Arc<Hotplug>,
     pub started_at: u64,
 }
 
@@ -69,12 +71,14 @@ pub fn build_app(
     config.server.management_port = management_port;
 
     let started_at = now_ms();
+    let hotplug = Arc::new(Hotplug::new(scanner.clone(), events.clone()));
     let state = Arc::new(AppState {
         config,
         manager,
         admin,
         scanner,
         events,
+        hotplug: Arc::clone(&hotplug),
         started_at,
     });
 
@@ -85,6 +89,10 @@ pub fn build_app(
             crate::ws::management::serve(state, listener, shutdown_rx).await;
         });
     }
+    // 热插拔轮询：启动后立即扫描一次，此后每 2s 一次。
+    tokio::spawn(async move {
+        hotplug.run(POLL_INTERVAL).await;
+    });
 
     Ok(App {
         state,

@@ -522,6 +522,24 @@ impl FakeScanner {
     pub fn set_ports(&self, ports: Vec<PortInfo>) {
         *self.ports.lock().unwrap() = ports;
     }
+
+    /// 向当前快照追加一个端口（热插拔用例模拟「插入设备」）。
+    pub fn add(&self, port: PortInfo) {
+        self.ports.lock().unwrap().push(port);
+    }
+}
+
+/// 构造一个最小可用的 [`PortInfo`]（热插拔用例用）。
+pub fn sample_port(path: &str) -> PortInfo {
+    PortInfo {
+        path: path.to_string(),
+        port_type: Some("usb".to_string()),
+        vid: None,
+        pid: None,
+        serial_number: None,
+        manufacturer: None,
+        product: None,
+    }
 }
 
 impl PortScanner for FakeScanner {

@@ -6,9 +6,9 @@ mod common;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use common::{FakeAdminController, FakeScanner, FakeTransport, FakeTransportFactory};
+use common::{sample_port, FakeAdminController, FakeScanner, FakeTransport, FakeTransportFactory};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio::sync::broadcast;
@@ -21,8 +21,10 @@ use websocket2serial::app::build_app;
 use websocket2serial::config::{Config, OriginAllowlist, ServerConfig, SessionConfig};
 use websocket2serial::protocol::SessionState;
 use websocket2serial::session::{
-    AttachedData, DataError, DataListenerFactory, DataListenerHandle, Session, SessionManager,
+    AttachedData, CloseReason, DataError, DataListenerFactory, DataListenerHandle, Session,
+    SessionManager,
 };
+use websocket2serial::ws::heartbeat::Heartbeat;
 use websocket2serial::ws::AxumDataListenerFactory;
 
 type Ws = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
@@ -51,6 +53,7 @@ struct App {
     built: websocket2serial::app::App,
     serial: FakeTransport,
     sessions: Arc<Mutex<HashMap<String, Arc<Session>>>>,
+    scanner: Arc<FakeScanner>,
     /// 直接 `manager.attach` 拿到的收发通道，保持 rx 存活、会话维持 active。
     attached: Mutex<Vec<AttachedData>>,
 }
@@ -58,6 +61,11 @@ struct App {
 impl App {
     fn management_port(&self) -> u16 {
         self.built.management_port
+    }
+
+    /// 手动触发一次热插拔扫描（对应生产每 2s 的轮询）。
+    async fn hotplug_tick(&self) {
+        self.built.state.hotplug.tick();
     }
 
     /// 直接 `manager.attach`：同步转入 active 并启动读写线程，避免数据 WS 握手竞态。
@@ -123,11 +131,12 @@ async fn test_app() -> App {
     };
     let admin = Arc::new(FakeAdminController::new());
     let scanner = Arc::new(FakeScanner::new());
-    let built = build_app(config, manager, admin, scanner, events).unwrap();
+    let built = build_app(config, manager, admin, scanner.clone(), events).unwrap();
     App {
         built,
         serial,
         sessions,
+        scanner,
         attached: Mutex::new(Vec::new()),
     }
 }
@@ -179,6 +188,49 @@ async fn next_event(ws: &mut Ws) -> Value {
     let v = next_json(ws).await;
     assert!(v.get("event").is_some(), "期望事件，收到 {v}");
     v
+}
+
+/// 读取下一条指定类型的事件（跳过其他事件，如 `hello`）。
+async fn next_event_of(ws: &mut Ws, name: &str) -> Value {
+    loop {
+        let v = next_event(ws).await;
+        if v.get("event").and_then(Value::as_str) == Some(name) {
+            return v;
+        }
+    }
+}
+
+/// 读取关闭帧的 close code；无 code 视为 1000。
+async fn close_code(ws: &mut Ws) -> u16 {
+    loop {
+        match ws.next().await.expect("流结束").expect("读取错误") {
+            Message::Close(Some(frame)) => return u16::from(frame.code),
+            Message::Close(None) => return 1000,
+            _ => continue,
+        }
+    }
+}
+
+/// 短轮询等待会话调试环形缓冲至少 `n` 帧（保证回放有内容可回放）。
+async fn wait_debug_frames(app: &App, id: &str, n: usize) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let len = app
+            .built
+            .state
+            .manager
+            .debug_snapshot(id)
+            .map(|f| f.len())
+            .unwrap_or(0);
+        if len >= n {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "等待调试帧 {n} 条超时（当前 {len}）"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
 }
 
 static REQ_ID: AtomicU64 = AtomicU64::new(0);
@@ -343,4 +395,125 @@ async fn management_disconnect_does_not_affect_data_ws() {
     let _hello = next_event(&mut mgmt2).await;
     let list = request(&mut mgmt2, "session.list", json!({})).await;
     assert_eq!(list["data"]["sessions"][0]["state"], "active");
+}
+
+#[tokio::test]
+async fn session_state_events_follow_lifecycle() {
+    let app = test_app().await;
+    let mut ws = connect_management(&app).await;
+    let open = request(&mut ws, "session.open", open_params()).await;
+    let id = open["data"]["sessionId"].as_str().unwrap().to_string();
+    let ev = next_event_of(&mut ws, "session.state").await;
+    assert_eq!(ev["data"]["state"], "awaiting");
+    assert_eq!(ev["data"]["sessionId"], id);
+    app.attach(&id).await;
+    let ev = next_event_of(&mut ws, "session.state").await;
+    assert_eq!(ev["data"]["state"], "active");
+}
+
+#[tokio::test]
+async fn debug_subscribe_replays_then_streams_with_seq() {
+    let app = test_app().await;
+    let mut ws = connect_management(&app).await;
+    let open = request(&mut ws, "session.open", open_params()).await;
+    let id = open["data"]["sessionId"].as_str().unwrap().to_string();
+    app.attach(&id).await;
+    // 灌入一条数据并等待其进入调试环形缓冲（seq=1），保证回放有内容。
+    app.serial.push_rx(b"before");
+    wait_debug_frames(&app, &id, 1).await;
+    request(
+        &mut ws,
+        "debug.subscribe",
+        json!({"sessionIds":[id],"replay":true}),
+    )
+    .await;
+    let replayed = next_event_of(&mut ws, "debug.frame").await;
+    assert_eq!(replayed["data"]["replay"], true);
+    // 再灌入实时数据，seq 应大于回放帧。
+    app.serial.push_rx(b"live");
+    let live = next_event_of(&mut ws, "debug.frame").await;
+    assert!(live["data"]["seq"].as_u64() > replayed["data"]["seq"].as_u64());
+}
+
+#[tokio::test]
+async fn ports_changed_is_emitted() {
+    let app = test_app().await;
+    let mut ws = connect_management(&app).await;
+    app.scanner.add(sample_port("COM9"));
+    app.hotplug_tick().await;
+    let ev = next_event_of(&mut ws, "ports.changed").await;
+    assert_eq!(ev["data"]["added"][0]["path"], "COM9");
+}
+
+#[test]
+fn heartbeat_dead_after_ten_seconds_without_pong() {
+    let mut h = Heartbeat::new(Duration::from_secs(5), Duration::from_secs(10));
+    h.on_pong(Instant::now());
+    assert!(!h.is_dead(Instant::now() + Duration::from_secs(9)));
+    assert!(h.is_dead(Instant::now() + Duration::from_secs(11)));
+}
+
+#[tokio::test]
+async fn slow_consumer_is_closed_with_1013_and_reconnect_lists_cleanly() {
+    let app = test_app().await;
+    let mut ws = connect_management(&app).await;
+    let _hello = next_event(&mut ws).await;
+    let open = request(&mut ws, "session.open", open_params()).await;
+    let id = open["data"]["sessionId"].as_str().unwrap().to_string();
+    app.attach(&id).await;
+    request(
+        &mut ws,
+        "debug.subscribe",
+        json!({"sessionIds":[id],"replay":false}),
+    )
+    .await;
+
+    // 客户端不读管理 WS：灌入大量 TX 调试帧（每写 64 KiB 产生约 57 帧），写队列终将满。
+    let payload = vec![0u8; 64 * 1024];
+    for _ in 0..64 {
+        app.built
+            .state
+            .manager
+            .write(&id, payload.clone())
+            .await
+            .unwrap();
+    }
+    // 等待写线程写完（tx_bytes 达到预期），保证调试帧已全部生成。
+    let expected = (64 * 64 * 1024) as u64;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let tx_bytes = app
+            .built
+            .state
+            .manager
+            .list()
+            .await
+            .iter()
+            .find(|s| s.session_id == id)
+            .map(|s| s.counters.tx_bytes)
+            .unwrap_or(0);
+        if tx_bytes >= expected {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "TX 未写完：{tx_bytes}/{expected}"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+
+    // 触发状态事件：关闭会话 → session.state(closed) 遇满 → 1013 关闭管理连接。
+    app.built
+        .state
+        .manager
+        .close(&id, CloseReason::AdminClosed)
+        .await
+        .unwrap();
+    assert_eq!(close_code(&mut ws).await, 1013);
+
+    // 重连后 session.list 为空（会话已关闭，状态一致）。
+    let mut ws2 = connect_management(&app).await;
+    let _hello = next_event(&mut ws2).await;
+    let list = request(&mut ws2, "session.list", json!({})).await;
+    assert_eq!(list["data"]["sessions"], json!([]));
 }
