@@ -1,0 +1,31 @@
+# WebSocket2Serial 配置模板（示例）。
+#
+# 复制为平台默认配置路径后按需修改，或直接删除让工具首次启动生成默认值：
+#   Windows: %APPDATA%\WebSocket2Serial\config.toml
+#   Linux:   ~/.config/websocket2serial/config.toml
+#
+# 注意：串口参数（端口/波特率等）绝不写入本文件，由网页/客户端侧保存。
+# 解析失败（含未知字段）时工具回退默认值并仍能启动，便于进管理页修复。
+
+[server]
+management_port = 8765
+
+[admin]
+enabled = true
+port = 8766
+
+[session]
+connect_timeout_ms = 5000
+grace_ms = 10000
+max_sessions = 8
+read_timeout_ms = 5
+write_timeout_ms = 5000
+rx_queue_bytes = 1048576
+tx_queue_bytes = 1048576
+
+[security]
+allowed_origins = ["http://127.0.0.1:*", "http://localhost:*"]
+
+[logging]
+level = "info"
+keep_days = 7

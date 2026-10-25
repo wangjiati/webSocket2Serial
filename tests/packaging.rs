@@ -1,5 +1,6 @@
 //! 交付物打包检查：参考客户端 / CLI 示例 / 协议文档的存在性、回环地址、
-//! 关键动作与「无外部 CDN」，以及可选依赖（Python `--help`、Node `--check`）。
+//! 关键动作与「无外部 CDN」，安装脚本关键内容，以及可选依赖（Python `--help`、
+//! Node `--check`、Python `py_compile`、Bash `-n`）。
 
 use std::process::Command;
 
@@ -90,6 +91,75 @@ fn client_js_parses_with_node() {
     assert!(
         output.status.success(),
         "node --check 应通过，stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// 安装脚本必须生成 Linux autostart `.desktop` 自启项，且引用二进制名。
+#[test]
+fn install_script_mentions_desktop_and_binary() {
+    let s = include_str!("../packaging/install.sh");
+    assert!(s.contains(".config/autostart"));
+    assert!(s.contains("websocket2serial"));
+}
+
+/// 打包脚本必须引用固定工具链与静态 CRT 目标，产出 zip/tar.gz。
+#[test]
+fn package_scripts_reference_toolchain_and_artifacts() {
+    let ps1 = include_str!("../scripts/package-windows.ps1");
+    assert!(ps1.contains("cargo +1.77.2 build --release"));
+    assert!(ps1.contains("x86_64-pc-windows-msvc"));
+    assert!(ps1.contains("crt-static"));
+    assert!(ps1.to_ascii_lowercase().contains(".zip"));
+
+    let sh = include_str!("../scripts/package-linux.sh");
+    assert!(sh.contains("ubuntu:18.04"));
+    assert!(sh.to_ascii_lowercase().contains(".tar.gz"));
+}
+
+/// soak.py 提供 `--hours` 与 `--reconnects`，且默认不硬编码 8 小时长跑。
+#[test]
+fn soak_script_has_hours_and_reconnects_short_default() {
+    let py = include_str!("../scripts/soak.py");
+    assert!(py.contains("--hours"));
+    assert!(py.contains("--reconnects"));
+    // 默认短跑：默认时长必须明显小于 8 小时（防止验收脚本默认跑整天）。
+    assert!(!py.contains("8 * 60 * 60"));
+    assert!(!py.contains("28800"));
+}
+
+/// 若环境有 Python，用 `py_compile` 校验 soak.py 语法；无则跳过。
+#[test]
+fn soak_script_py_compiles() {
+    let Some(python) = find_command(&["python", "python3", "py"]) else {
+        eprintln!("跳过：环境未找到 python/python3");
+        return;
+    };
+    let output = Command::new(python)
+        .args(["-m", "py_compile", "scripts/soak.py"])
+        .output()
+        .expect("执行 py_compile 失败");
+    assert!(
+        output.status.success(),
+        "soak.py 语法错误，stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// 若环境有 Bash，用 `bash -n` 校验 install.sh 语法；无则跳过。
+#[test]
+fn install_script_bash_parses() {
+    let Some(bash) = find_command(&["bash"]) else {
+        eprintln!("跳过：环境未找到 bash");
+        return;
+    };
+    let output = Command::new(bash)
+        .args(["-n", "packaging/install.sh"])
+        .output()
+        .expect("执行 bash -n 失败");
+    assert!(
+        output.status.success(),
+        "install.sh 语法错误，stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 }
