@@ -8,6 +8,7 @@ pub mod logging;
 pub mod paths;
 pub mod protocol;
 pub mod serial;
+pub mod session;
 
 pub use cli::Cli;
 pub use config::{Config, OriginAllowlist};
