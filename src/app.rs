@@ -4,6 +4,8 @@
 //! [`AdminController`] 抽象管理页服务开关（任务 12 实现真实版，测试用 fake）；
 //! [`build_app`] 绑定管理端口并启动管理 WS 服务。
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use tokio::sync::{broadcast, oneshot};
@@ -27,13 +29,13 @@ pub struct AppState {
 
 /// 管理页服务控制。
 ///
-/// 对象安全：无泛型、无 `async`、无 `Self` 返回。`set_enabled` 采用同步绑定
-/// `std::net::TcpListener`（开销小）后 spawn 服务任务的方式；真实实现见
-/// [`crate::http::AdminService`]，测试用 fake 见 `tests/common` 的
-/// `FakeAdminController`。
+/// 对象安全：无泛型、无 `Self` 返回。`set_enabled` 返回对象安全的 boxed `Future`，
+/// disable 必须 await 到 serve 任务退出、端口真正释放后才返回，避免关→立即开的
+/// `AddrInUse`；真实实现见 [`crate::http::AdminService`]，测试用 fake 见
+/// `tests/common` 的 `FakeAdminController`。
 pub trait AdminController: Send + Sync {
     fn status(&self) -> AdminState;
-    fn set_enabled(&self, enabled: bool) -> AdminState;
+    fn set_enabled(&self, enabled: bool) -> Pin<Box<dyn Future<Output = AdminState> + Send + '_>>;
 }
 
 /// 已启动的应用：持有 [`AppState`] 与管理 WS 的 shutdown 信号。

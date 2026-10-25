@@ -6,6 +6,8 @@
 #![allow(dead_code)]
 
 use std::collections::VecDeque;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -570,9 +572,12 @@ impl AdminController for FakeAdminController {
         self.state.lock().unwrap().clone()
     }
 
-    fn set_enabled(&self, enabled: bool) -> AdminState {
-        let mut state = self.state.lock().unwrap();
-        state.enabled = enabled;
-        state.clone()
+    fn set_enabled(&self, enabled: bool) -> Pin<Box<dyn Future<Output = AdminState> + Send + '_>> {
+        let state = {
+            let mut state = self.state.lock().unwrap();
+            state.enabled = enabled;
+            state.clone()
+        };
+        Box::pin(async move { state })
     }
 }

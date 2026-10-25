@@ -454,7 +454,7 @@ async fn debug_subscribe(
 /// `admin.set`：运行时开关管理页服务（不回写配置），并广播 `admin.state`。
 async fn admin_set(app: &AppState, params: &Value) -> Result<Value, ErrorBody> {
     let params: AdminSetParams = parse_params(params)?;
-    let state = app.admin.set_enabled(params.enabled);
+    let state = app.admin.set_enabled(params.enabled).await;
     let _ = app.events.send(Event::AdminState(state.clone()));
     to_value(state)
 }

@@ -58,26 +58,54 @@ async fn admin_can_be_disabled_and_reenabled() {
     svc.shutdown().await;
 }
 
-/// 管理 WS 实际走 `Arc<dyn AdminController>` 的同步 `set_enabled`；这里直接以 trait
-/// 对象驱动真实 HTTP 服务，验证同步开关（含关→开）能正确释放并重新绑定端口。
+/// 管理 WS 实际走 `Arc<dyn AdminController>` 的异步 `set_enabled`；这里直接以 trait
+/// 对象驱动真实 HTTP 服务，验证异步开关（含关→开）能正确释放并重新绑定端口。
 #[tokio::test]
 async fn admin_controller_trait_drives_http_service() {
     let svc = AdminService::new(0, 8765);
     let controller: Arc<dyn AdminController> = Arc::new(svc);
 
-    let enabled = controller.set_enabled(true);
+    let enabled = controller.set_enabled(true).await;
     assert!(enabled.enabled);
     wait_reachable(&enabled.url).await;
 
-    let disabled = controller.set_enabled(false);
+    let disabled = controller.set_enabled(false).await;
     assert!(!disabled.enabled);
     wait_unreachable(&enabled.url).await;
 
-    let reenabled = controller.set_enabled(true);
+    let reenabled = controller.set_enabled(true).await;
     assert!(reenabled.enabled);
     wait_reachable(&reenabled.url).await;
 
-    controller.set_enabled(false);
+    controller.set_enabled(false).await;
+}
+
+/// 关→立即开不得出现 `AddrInUse`：`set_enabled(false)` 必须 await 到 serve 任务退出、
+/// 端口真正释放后才返回，因此紧接的 `set_enabled(true)` 必须成功且立即可访问。
+#[tokio::test]
+async fn immediate_disable_then_enable_via_controller() {
+    let svc = AdminService::new(0, 8765);
+    let controller: Arc<dyn AdminController> = Arc::new(svc);
+
+    let enabled = controller.set_enabled(true).await;
+    assert!(enabled.enabled);
+    wait_reachable(&enabled.url).await;
+
+    // 不轮询等待端口释放，连续 disable 后立刻 enable。
+    let disabled = controller.set_enabled(false).await;
+    assert!(!disabled.enabled);
+    let reenabled = controller.set_enabled(true).await;
+    assert!(reenabled.enabled);
+
+    assert!(client()
+        .get(format!("{}/api/config", reenabled.url))
+        .send()
+        .await
+        .unwrap()
+        .status()
+        .is_success());
+
+    controller.set_enabled(false).await;
 }
 
 async fn wait_reachable(url: &str) {

@@ -6,7 +6,9 @@
 //! `AppState.admin` 形成循环——管理 WS 端口与自启状态由构造参数与
 //! [`AdminService::set_autostart_status`] 注入。
 
+use std::future::Future;
 use std::io;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -165,13 +167,6 @@ impl AdminService {
         });
         Ok(state)
     }
-
-    /// 同步停止：发 shutdown 信号并 detach serve 任务（端口随任务退出释放）。
-    fn stop_and_detach(&self) {
-        if let Some(handle) = self.state.lock().unwrap().take() {
-            let _ = handle.shutdown.send(());
-        }
-    }
 }
 
 impl AdminController for AdminService {
@@ -179,9 +174,9 @@ impl AdminController for AdminService {
         AdminService::status(self)
     }
 
-    fn set_enabled(&self, enabled: bool) -> AdminState {
-        if enabled {
-            match self.bind_and_spawn() {
+    fn set_enabled(&self, enabled: bool) -> Pin<Box<dyn Future<Output = AdminState> + Send + '_>> {
+        Box::pin(async move {
+            match AdminService::set_enabled(self, enabled).await {
                 Ok(state) => state,
                 Err(err) => {
                     tracing::warn!(error = %err, "管理页启动失败");
@@ -191,13 +186,7 @@ impl AdminController for AdminService {
                     }
                 }
             }
-        } else {
-            self.stop_and_detach();
-            AdminState {
-                enabled: false,
-                url: String::new(),
-            }
-        }
+        })
     }
 }
 
