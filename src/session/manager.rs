@@ -173,7 +173,7 @@ impl SessionManager {
                         .get(&session_id)
                         .and_then(|session| session.close_reason())
                         .unwrap_or(CloseReason::DeviceLost);
-                    shared.close_inner(&session_id, reason);
+                    shared.close_inner(&session_id, reason).await;
                 }
             });
         }
@@ -202,12 +202,11 @@ impl SessionManager {
             let mut opening = shared.opening.lock().unwrap();
 
             if let Some(session_id) = ports.get(&path).cloned() {
-                Reserved::Reuse(
-                    sessions
-                        .get(&session_id)
-                        .cloned()
-                        .ok_or(ManagerError::SessionNotFound)?,
-                )
+                match sessions.get(&session_id).cloned() {
+                    Some(session) => Reserved::Reuse(session),
+                    // 端口锁仍持有但会话已从 `sessions` 移除（关闭清理中）：视为占用。
+                    None => return Err(ManagerError::PortBusy),
+                }
             } else if opening.contains(&path) {
                 // 并发 open 同一 path：占位已存在，后来者视为占用。
                 return Err(ManagerError::PortBusy);
@@ -309,7 +308,7 @@ impl SessionManager {
 
     /// 关闭会话（幂等）：移除会话、释放端口、关闭数据监听、发送 `session.state(closed)`。
     pub async fn close(&self, session_id: &str, reason: CloseReason) -> Result<(), ManagerError> {
-        self.inner.shared.close_inner(session_id, reason);
+        self.inner.shared.close_inner(session_id, reason).await;
         Ok(())
     }
 
@@ -419,7 +418,11 @@ impl ManagerShared {
     }
 
     /// 关闭会话并清理资源；已不存在时静默返回（幂等）。
-    fn close_inner(&self, session_id: &str, reason: CloseReason) {
+    ///
+    /// 顺序：先同步移除 `sessions`/`handles`（幂等 + 让 `list` 立即空掉），再 close，
+    /// 随后在 `spawn_blocking` 中 join 线程并释放串口，**await 完成后再移除端口锁**，
+    /// 保证 `close().await` 返回前串口句柄已真正释放，顺序 close→reopen 不出现 Busy。
+    async fn close_inner(&self, session_id: &str, reason: CloseReason) {
         // 先记录关闭原因（在移除会话之前），供观测/测试查询。
         self.closed_reasons
             .lock()
@@ -433,20 +436,24 @@ impl ManagerShared {
                 (None, _) => return,
             }
         };
-        // 释放端口锁。
-        {
-            let mut ports = self.ports.lock().unwrap();
-            let path = session.info().port;
-            ports.remove(&path);
-        }
+        let path = session.info().port;
+
         // 触发 close watch / closed_tx（幂等；先移除再 close 以避免重复事件）。
         session.close(reason);
-        // join 读/写线程并释放串口放到 spawn_blocking，避免阻塞 tokio worker。
+        // join 读/写线程并释放串口放到 spawn_blocking，await 完成后再释放端口锁。
         let session_arc = Arc::clone(&session);
         tokio::task::spawn_blocking(move || {
             session_arc.shutdown_io();
             drop(session_arc.take_transport());
-        });
+        })
+        .await
+        .expect("shutdown_io 线程 panic");
+
+        // 串口已释放：移除端口锁，允许立即 reopen。
+        {
+            let mut ports = self.ports.lock().unwrap();
+            ports.remove(&path);
+        }
         // 发送 `session.state(closed)`。
         self.emit(
             &session,
@@ -546,7 +553,7 @@ impl ManagerShared {
                             return;
                         }
                     }
-                    shared.close_inner(&session_id, reason);
+                    shared.close_inner(&session_id, reason).await;
                     return;
                 }
                 // 等到本次读取到的截止；到点后回到循环顶部重新读取（可能被刷新）。

@@ -150,3 +150,19 @@ async fn close_does_not_block_runtime() {
         "close 阻塞运行时：{elapsed:?}"
     );
 }
+
+#[tokio::test]
+async fn close_then_immediate_reopen_succeeds() {
+    let (mgr, _fake, dropped) = test_manager_with_drop_notifying_serial();
+    let r = mgr.open(sample_open("COM3")).await.unwrap();
+    let _attached = mgr.attach(&r.session_id, &token_of(&r)).await.unwrap();
+
+    mgr.close(&r.session_id, CloseReason::AdminClosed)
+        .await
+        .unwrap();
+    // close 返回时串口对象必须已 drop（否则立即 reopen 会 Busy）。
+    assert!(dropped.load(Ordering::SeqCst), "close 返回时串口未释放");
+
+    let again = mgr.open(sample_open("COM3")).await.unwrap();
+    assert!(!again.reused);
+}

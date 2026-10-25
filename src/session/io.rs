@@ -28,9 +28,6 @@ const CHUNK_MAX: u32 = 4096;
 /// 写线程空闲时的轮询间隔；shutdown 信号在该间隔内被观察到。
 const WRITE_POLL: Duration = Duration::from_millis(5);
 
-/// join 线程的总超时；超时后放弃等待（detach），避免关闭被卡住。
-const JOIN_TIMEOUT: Duration = Duration::from_secs(1);
-
 /// 运行中的读/写线程句柄、共享串口传输与独立 shutdown 信号。
 pub(crate) struct IoHandle {
     shutdown: Arc<AtomicBool>,
@@ -69,10 +66,10 @@ impl IoHandle {
         }
     }
 
-    /// 先置 shutdown 信号让线程自行退出，再带总超时 join 并释放串口。
-    pub(crate) fn shutdown(self) {
+    /// 先置 shutdown 信号让线程自行退出，再在 `budget` 总预算内 join 并释放串口。
+    pub(crate) fn shutdown(self, budget: Duration) {
         self.shutdown.store(true, Ordering::SeqCst);
-        let deadline = Instant::now() + JOIN_TIMEOUT;
+        let deadline = Instant::now() + budget;
         join_until(self.read, deadline);
         join_until(self.write, deadline);
         // 显式 drop 串口传输，释放串口句柄（RAII 在此收尾）。

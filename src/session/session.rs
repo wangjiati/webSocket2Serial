@@ -6,7 +6,7 @@
 
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tokio::sync::{broadcast, mpsc, watch};
 
@@ -333,9 +333,13 @@ impl Session {
     }
 
     /// 关闭时由 manager 调用：join 读/写线程并释放串口（幂等）。
+    ///
+    /// join 预算为 `write_timeout_ms + 1s`：空闲线程 5ms 内退出，卡写最坏等待
+    /// 完整写超时 + 1s，不提前假释放。
     pub(crate) fn shutdown_io(&self) {
         if let Some(io) = self.io.lock().unwrap().take() {
-            io.shutdown();
+            let budget = Duration::from_millis(self.write_timeout_ms()) + Duration::from_secs(1);
+            io.shutdown(budget);
         }
     }
 
