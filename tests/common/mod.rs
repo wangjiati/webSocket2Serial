@@ -1,0 +1,205 @@
+//! 集成测试共享替身。
+//!
+//! 本模块只被测试目标引用；`FakeTransport` 通过共享状态注入读数据、记录写数据，
+//! 并可注入各类 `TransportError`。生产代码不得依赖这里的任何类型。
+
+#![allow(dead_code)]
+
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use websocket2serial::serial::{SerialParams, SerialTransport, TransportError, TransportFactory};
+
+/// 假串口：多个线程通过同一个 `Arc<Mutex<FakeState>>` 观察/修改状态。
+#[derive(Debug, Clone, Default)]
+pub struct FakeTransport {
+    state: Arc<Mutex<FakeState>>,
+}
+
+#[derive(Debug, Default)]
+struct FakeState {
+    /// 待读取的数据块；每块按顺序交付，块内可被较小的 `buf` 拆开。
+    rx: VecDeque<Vec<u8>>,
+    written: Vec<u8>,
+    next_read_error: Option<TransportError>,
+    next_write_error: Option<TransportError>,
+    dtr: Option<bool>,
+    rts: Option<bool>,
+    read_calls: usize,
+    write_calls: usize,
+}
+
+impl FakeTransport {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 追加一段待读取数据；连续调用保留块边界。
+    pub fn push_rx(&self, bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
+        }
+        self.state.lock().unwrap().rx.push_back(bytes.to_vec());
+    }
+
+    /// 下一次 `read` 立即返回指定错误。
+    pub fn fail_next_read(&self, error: TransportError) {
+        self.state.lock().unwrap().next_read_error = Some(error);
+    }
+
+    /// 下一次 `write` 立即返回指定错误。
+    pub fn fail_next_write(&self, error: TransportError) {
+        self.state.lock().unwrap().next_write_error = Some(error);
+    }
+
+    /// 目前已写入串口的全部字节。
+    pub fn written(&self) -> Vec<u8> {
+        self.state.lock().unwrap().written.clone()
+    }
+
+    /// 取走并清空目前已写入的字节。
+    pub fn take_written(&self) -> Vec<u8> {
+        std::mem::take(&mut self.state.lock().unwrap().written)
+    }
+
+    pub fn dtr(&self) -> Option<bool> {
+        self.state.lock().unwrap().dtr
+    }
+
+    pub fn rts(&self) -> Option<bool> {
+        self.state.lock().unwrap().rts
+    }
+
+    pub fn read_calls(&self) -> usize {
+        self.state.lock().unwrap().read_calls
+    }
+
+    pub fn write_calls(&self) -> usize {
+        self.state.lock().unwrap().write_calls
+    }
+
+    /// 等待串口收到的写数据恰好等于 `expected`；超时则 panic 并带出实际值。
+    pub async fn expect_tx(&self, expected: &[u8]) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let actual = self.written();
+            if actual == expected {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "expect_tx 超时：期望 {:?}，实际 {:?}",
+                expected,
+                actual
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+}
+
+impl SerialTransport for FakeTransport {
+    fn read(&mut self, buf: &mut [u8], timeout: Duration) -> Result<usize, TransportError> {
+        let mut state = self.state.lock().unwrap();
+        state.read_calls += 1;
+        if let Some(error) = state.next_read_error.take() {
+            return Err(error);
+        }
+        if let Some(mut chunk) = state.rx.pop_front() {
+            let n = buf.len().min(chunk.len());
+            buf[..n].copy_from_slice(&chunk[..n]);
+            if n < chunk.len() {
+                chunk.drain(..n);
+                state.rx.push_front(chunk);
+            }
+            return Ok(n);
+        }
+        drop(state);
+        // 模拟真实驱动：无数据时阻塞到超时再返回 Timeout，避免读线程空转。
+        std::thread::sleep(timeout.clamp(Duration::from_millis(1), Duration::from_millis(10)));
+        Err(TransportError::Timeout)
+    }
+
+    fn write(&mut self, buf: &[u8], _timeout: Duration) -> Result<usize, TransportError> {
+        let mut state = self.state.lock().unwrap();
+        state.write_calls += 1;
+        if let Some(error) = state.next_write_error.take() {
+            return Err(error);
+        }
+        state.written.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn set_dtr(&mut self, level: bool) -> Result<(), TransportError> {
+        self.state.lock().unwrap().dtr = Some(level);
+        Ok(())
+    }
+
+    fn set_rts(&mut self, level: bool) -> Result<(), TransportError> {
+        self.state.lock().unwrap().rts = Some(level);
+        Ok(())
+    }
+}
+
+/// 假串口工厂：每次 `open` 生成新的 `FakeTransport`，并记录次数与参数。
+#[derive(Debug, Default)]
+pub struct FakeTransportFactory {
+    state: Mutex<FactoryState>,
+}
+
+#[derive(Debug, Default)]
+struct FactoryState {
+    open_count: usize,
+    next_open_error: Option<TransportError>,
+    transports: Vec<Arc<FakeTransport>>,
+    opens: Vec<SerialParams>,
+}
+
+impl FakeTransportFactory {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 下一次 `open` 返回指定错误（如 NotFound/PermissionDenied/Busy）。
+    pub fn fail_next_open(&self, error: TransportError) {
+        self.state.lock().unwrap().next_open_error = Some(error);
+    }
+
+    pub fn open_count(&self) -> usize {
+        self.state.lock().unwrap().open_count
+    }
+
+    /// 最近一次成功打开的假串口；尚未打开时 panic。
+    pub fn transport(&self) -> Arc<FakeTransport> {
+        self.state
+            .lock()
+            .unwrap()
+            .transports
+            .last()
+            .cloned()
+            .expect("尚未打开任何 FakeTransport")
+    }
+
+    pub fn transport_at(&self, index: usize) -> Option<Arc<FakeTransport>> {
+        self.state.lock().unwrap().transports.get(index).cloned()
+    }
+
+    /// 最近一次成功打开所用参数。
+    pub fn last_params(&self) -> Option<SerialParams> {
+        self.state.lock().unwrap().opens.last().cloned()
+    }
+}
+
+impl TransportFactory for FakeTransportFactory {
+    fn open(&self, params: &SerialParams) -> Result<Box<dyn SerialTransport>, TransportError> {
+        let mut state = self.state.lock().unwrap();
+        state.open_count += 1;
+        if let Some(error) = state.next_open_error.take() {
+            return Err(error);
+        }
+        let transport = FakeTransport::new();
+        state.transports.push(Arc::new(transport.clone()));
+        state.opens.push(params.clone());
+        Ok(Box::new(transport))
+    }
+}
