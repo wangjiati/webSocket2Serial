@@ -42,6 +42,8 @@ pub enum CloseReason {
     GraceTimeout,
     /// awaiting 连接超时；数据 WS 尚未建立，无 close code。
     AwaitingTimeout,
+    /// 工具退出/系统关闭（1001）。
+    Shutdown,
 }
 
 impl CloseReason {
@@ -54,6 +56,7 @@ impl CloseReason {
             CloseReason::WriteTimeout | CloseReason::SerialIo => Some(4007),
             CloseReason::Backpressure => Some(4005),
             CloseReason::GraceTimeout | CloseReason::AwaitingTimeout => None,
+            CloseReason::Shutdown => Some(1001),
         }
     }
 
@@ -68,6 +71,7 @@ impl CloseReason {
             CloseReason::Backpressure => "BACKPRESSURE",
             CloseReason::GraceTimeout => "GRACE_TIMEOUT",
             CloseReason::AwaitingTimeout => "SESSION_EXPIRED",
+            CloseReason::Shutdown => "SHUTDOWN",
         }
     }
 }

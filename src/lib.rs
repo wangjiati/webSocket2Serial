@@ -9,9 +9,11 @@ pub mod hotplug;
 pub mod http;
 pub mod logging;
 pub mod paths;
+pub mod platform;
 pub mod protocol;
 pub mod serial;
 pub mod session;
+pub mod tray;
 pub mod ws;
 
 pub use app::{AdminController, AppState};
