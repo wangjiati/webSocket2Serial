@@ -54,3 +54,17 @@ fn port_diff_detects_added_and_removed() {
     assert_eq!(d.added, vec![b]);
     assert_eq!(d.removed, vec![a.path]);
 }
+
+#[test]
+fn rejects_mark_space_parity() {
+    for parity in [Parity::Mark, Parity::Space] {
+        let mut p = sample_params("COM3");
+        p.parity = parity;
+        assert!(p.validate().is_err());
+    }
+    for parity in [Parity::None, Parity::Odd, Parity::Even] {
+        let mut p = sample_params("COM3");
+        p.parity = parity;
+        assert!(p.validate().is_ok());
+    }
+}

@@ -37,6 +37,11 @@ impl SerialParams {
         if self.stop_bits != 1 && self.stop_bits != 2 {
             return Err(ParamError::InvalidStopBits(self.stop_bits));
         }
+        // v1 只支持 none/odd/even；mark/space 在协议层保留，但底层 serialport 无法表达，
+        // 在参数校验阶段直接拒绝为参数错误（任务 6 映射为 INVALID_PARAMS）。
+        if !matches!(self.parity, Parity::None | Parity::Odd | Parity::Even) {
+            return Err(ParamError::UnsupportedParity(self.parity));
+        }
         Ok(())
     }
 }
@@ -67,4 +72,6 @@ pub enum ParamError {
     InvalidDataBits(u8),
     #[error("停止位必须是 1 或 2，实际为 {0}")]
     InvalidStopBits(u8),
+    #[error("校验位 v1 仅支持 none/odd/even，实际为 {0:?}")]
+    UnsupportedParity(Parity),
 }

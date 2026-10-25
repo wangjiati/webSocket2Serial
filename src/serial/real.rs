@@ -50,7 +50,9 @@ impl TransportFactory for SystemTransportFactory {
             builder = builder.dtr_on_open(dtr);
         }
 
-        let port = builder.open().map_err(map_open_error)?;
+        let port = builder
+            .open()
+            .map_err(|e| map_open_error(e, &params.path))?;
         let mut transport = RealTransport {
             port,
             read_timeout: self.read_timeout,
@@ -143,15 +145,33 @@ fn map_io_error_full(error: io::Error, on_timeout: TransportError) -> TransportE
     }
 }
 
-/// 打开串口失败的映射：serialport 会把“被占用”归一为 `NoDevice`。
-fn map_open_error(error: serialport::Error) -> TransportError {
+/// 打开串口失败的映射：serialport 会把“被占用”与 Windows 下的“不存在”都归一为 `NoDevice`。
+fn map_open_error(error: serialport::Error, path: &str) -> TransportError {
     match error.kind() {
-        // Linux 的 TIOCEXCL EBUSY 与 Windows 的 ERROR_ACCESS_DENIED 都落为 NoDevice；
-        // Windows 下“不存在”也同为 NoDevice，无法进一步区分，统一按“被占用”处理。
-        ErrorKind::NoDevice => TransportError::Busy,
+        // Windows 下 `ERROR_FILE_NOT_FOUND`/`ERROR_ACCESS_DENIED` 都落为 NoDevice，
+        // 用端口枚举结果消歧“不存在 vs 被占用”。
+        ErrorKind::NoDevice => {
+            let available = serialport::available_ports()
+                .ok()
+                .map(|ports| ports.into_iter().map(|p| p.port_name).collect::<Vec<_>>());
+            classify_no_device(path, available.as_deref())
+        }
         ErrorKind::Io(io::ErrorKind::NotFound) => TransportError::NotFound,
         ErrorKind::Io(io::ErrorKind::PermissionDenied) => TransportError::PermissionDenied,
         _ => TransportError::Io(error.to_string()),
+    }
+}
+
+/// 纯函数：用端口枚举结果消歧 `NoDevice`。
+///
+/// - `available = None`：枚举失败，无法判断，归 `Io`。
+/// - `path` 在列表中：端口存在但打不开 → `Busy`。
+/// - `path` 不在列表中：端口不存在 → `NotFound`。
+fn classify_no_device(path: &str, available: Option<&[String]>) -> TransportError {
+    match available {
+        None => TransportError::Io("打开失败且无法枚举端口以区分不存在/占用".to_string()),
+        Some(paths) if paths.iter().any(|p| p == path) => TransportError::Busy,
+        Some(_) => TransportError::NotFound,
     }
 }
 
@@ -213,5 +233,98 @@ fn map_flow_control(flow_control: FlowControl) -> SerialFlowControl {
         FlowControl::None => SerialFlowControl::None,
         FlowControl::Software => SerialFlowControl::Software,
         FlowControl::Hardware => SerialFlowControl::Hardware,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn io_err(kind: io::ErrorKind) -> io::Error {
+        io::Error::new(kind, "test")
+    }
+
+    #[test]
+    fn map_io_error_full_distinguishes_read_write_timeout() {
+        // 读路径：调用方传 Timeout。
+        assert_eq!(
+            map_io_error_full(io_err(io::ErrorKind::TimedOut), TransportError::Timeout),
+            TransportError::Timeout
+        );
+        // 写路径：调用方传 WriteTimeout。
+        assert_eq!(
+            map_io_error_full(
+                io_err(io::ErrorKind::TimedOut),
+                TransportError::WriteTimeout
+            ),
+            TransportError::WriteTimeout
+        );
+    }
+
+    #[test]
+    fn classify_no_device_disambiguates() {
+        let available = ["COM1", "COM3"].map(String::from);
+
+        // 不在列表 → NotFound
+        assert_eq!(
+            classify_no_device("COM9", Some(available.as_slice())),
+            TransportError::NotFound
+        );
+        // 在列表 → Busy
+        assert_eq!(
+            classify_no_device("COM3", Some(available.as_slice())),
+            TransportError::Busy
+        );
+        // 枚举失败 → Io
+        assert!(matches!(
+            classify_no_device("COM3", None),
+            TransportError::Io(_)
+        ));
+    }
+
+    #[test]
+    fn map_open_error_maps_not_found_and_permission() {
+        let not_found = serialport::Error::new(
+            serialport::ErrorKind::Io(io::ErrorKind::NotFound),
+            "missing",
+        );
+        assert_eq!(map_open_error(not_found, "COM3"), TransportError::NotFound);
+
+        let denied = serialport::Error::new(
+            serialport::ErrorKind::Io(io::ErrorKind::PermissionDenied),
+            "denied",
+        );
+        assert_eq!(
+            map_open_error(denied, "COM3"),
+            TransportError::PermissionDenied
+        );
+    }
+
+    #[test]
+    fn map_parity_rejects_mark_space() {
+        assert_eq!(map_parity(Parity::None).unwrap(), SerialParity::None);
+        assert_eq!(map_parity(Parity::Odd).unwrap(), SerialParity::Odd);
+        assert_eq!(map_parity(Parity::Even).unwrap(), SerialParity::Even);
+        assert!(matches!(
+            map_parity(Parity::Mark),
+            Err(TransportError::Io(_))
+        ));
+        assert!(matches!(
+            map_parity(Parity::Space),
+            Err(TransportError::Io(_))
+        ));
+    }
+
+    #[test]
+    fn map_flow_control_maps_all() {
+        assert_eq!(map_flow_control(FlowControl::None), SerialFlowControl::None);
+        assert_eq!(
+            map_flow_control(FlowControl::Software),
+            SerialFlowControl::Software
+        );
+        assert_eq!(
+            map_flow_control(FlowControl::Hardware),
+            SerialFlowControl::Hardware
+        );
     }
 }
