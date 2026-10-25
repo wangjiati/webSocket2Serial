@@ -114,6 +114,7 @@ fn package_scripts_reference_toolchain_and_artifacts() {
 
     let sh = include_str!("../scripts/package-linux.sh");
     assert!(sh.contains("ubuntu:18.04"));
+    assert!(sh.contains("old-releases.ubuntu.com"));
     assert!(sh.to_ascii_lowercase().contains(".tar.gz"));
 }
 

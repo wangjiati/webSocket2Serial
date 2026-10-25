@@ -38,14 +38,20 @@ if [[ -z "$DOCKER" ]]; then
   echo "请在有 Docker 的 Linux 构建机上执行本脚本；或手动在 Ubuntu 18.04 环境构建：" >&2
   cat >&2 <<'EOF'
   1. docker run --rm -it -v "$PWD":/src -w /src ubuntu:18.04 bash
-  2. apt-get update && apt-get install -y build-essential pkg-config libudev-dev curl ca-certificates
+  2. # ubuntu:18.04 已 EOL，先切 apt 源到 old-releases 再更新：
+     sed -i \
+       -e 's|archive\.ubuntu\.com|old-releases.ubuntu.com|g' \
+       -e 's|security\.ubuntu\.com|old-releases.ubuntu.com|g' \
+       -e 's|ports\.ubuntu\.com|old-releases.ubuntu.com|g' \
+       /etc/apt/sources.list
+     apt-get update && apt-get install -y build-essential pkg-config libudev-dev curl ca-certificates
   3. curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.77.2
      . "$HOME/.cargo/env"
   4. cargo +1.77.2 build --release
   5. 按本脚本末尾的 tar 步骤打包。
 EOF
   echo "" >&2
-  echo "注意：ubuntu:18.04 已 EOL，apt 源可能需切换到 old-releases.ubuntu.com。" >&2
+  echo "注意：ubuntu:18.04 已 EOL，apt 源需切换到 old-releases.ubuntu.com。" >&2
   exit 1
 fi
 
@@ -58,14 +64,28 @@ mkdir -p "$DIST"
   "$IMAGE" \
   bash -c '
 set -euo pipefail
+
+# ubuntu:18.04 已 EOL：官方镜像 sources.list 仍指向 archive/security（会 404），
+# 把 apt 源切到 old-releases.ubuntu.com 再更新（含 ports.ubuntu.com，如适用）。
+switch_apt_source() {
+  sed -i \
+    -e "s|archive\.ubuntu\.com|old-releases.ubuntu.com|g" \
+    -e "s|security\.ubuntu\.com|old-releases.ubuntu.com|g" \
+    -e "s|ports\.ubuntu\.com|old-releases.ubuntu.com|g" \
+    "$1"
+}
+switch_apt_source /etc/apt/sources.list
+for f in /etc/apt/sources.list.d/*.list; do
+  [ -e "$f" ] && switch_apt_source "$f"
+done
+
 apt-get update
 apt-get install -y build-essential pkg-config libudev-dev curl ca-certificates
-# 安装 Rust 1.77.2（rustup 非交互；若容器镜像已带则跳过）。
+# 安装 Rust 1.77.2（rustup 非交互；--default-toolchain 已包含 1.77.2）。
 if ! command -v rustup >/dev/null 2>&1; then
   curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.77.2
 fi
 . "$HOME/.cargo/env"
-rustup toolchain install 1.77.2 --profile minimal || true
 cargo +1.77.2 build --release
 
 # 打包（固定目录结构）。

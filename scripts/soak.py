@@ -55,21 +55,21 @@ class SoakError(Exception):
 def _import_websockets():
     try:
         import websockets
-        from websockets.exceptions import ConnectionClosed
+        from websockets.exceptions import ConnectionClosed, WebSocketException
     except ImportError as exc:  # pragma: no cover - 依赖环境
         raise SoakError(
             "缺少依赖 `websockets`，请先安装：python -m pip install websockets"
         ) from exc
-    return websockets, ConnectionClosed
+    return websockets, ConnectionClosed, WebSocketException
 
 
 def _connect(url):
-    websockets, _ = _import_websockets()
+    websockets, _, _ = _import_websockets()
     return websockets.connect(url)
 
 
 async def _request(ws, action: str, params: dict):
-    _, ConnectionClosed = _import_websockets()
+    _, ConnectionClosed, _ = _import_websockets()
     req_id = _next_id()
     try:
         await ws.send(json.dumps({"id": req_id, "action": action, "params": params}))
@@ -143,21 +143,26 @@ def _summary(state: dict) -> None:
 
 async def _counting_loop(data, args, state, end_at: float) -> None:
     """发送确定性字节流并校验回环，直到 end_at（monotonic 秒）。"""
+    _, _, WebSocketException = _import_websockets()
     last_summary = time.monotonic()
     while time.monotonic() < end_at:
-        now = time.monotonic()
-        if now - state["last_send"] >= args.pause:
-            chunk = _make_chunk(state["sent"], args.chunk)
-            await data.send(chunk)
-            state["sent"] += len(chunk)
-            state["last_send"] = now
         try:
-            msg = await asyncio.wait_for(data.recv(), timeout=0.05)
-        except asyncio.TimeoutError:
-            msg = None
-        if isinstance(msg, (bytes, bytearray)):
-            _verify(bytes(msg), state)
-        # 文本帧（不应出现）忽略。
+            now = time.monotonic()
+            if now - state["last_send"] >= args.pause:
+                chunk = _make_chunk(state["sent"], args.chunk)
+                await data.send(chunk)
+                state["sent"] += len(chunk)
+                state["last_send"] = now
+            try:
+                msg = await asyncio.wait_for(data.recv(), timeout=0.05)
+            except asyncio.TimeoutError:
+                msg = None
+            if isinstance(msg, (bytes, bytearray)):
+                _verify(bytes(msg), state)
+            # 文本帧（不应出现）忽略。
+        except WebSocketException as exc:
+            # 设备拔插 / 服务关闭导致的意外断连：转 SoakError 走可控报告路径。
+            raise SoakError(f"数据连接意外断开：{exc}") from exc
         if now - last_summary >= args.summary_interval:
             _summary(state)
             last_summary = now
@@ -237,10 +242,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
     if args.duration <= 0 or (args.hours is not None and args.hours <= 0):
-        print("错误：时长必须为正数", file=sys.stderr)
-        return 2
+        parser.error("时长必须为正数")
+    if args.reconnects < 0:
+        parser.error("--reconnects 不能为负")
+    if args.chunk <= 0:
+        parser.error("--chunk 必须为正数")
+    if args.pause <= 0:
+        parser.error("--pause 必须为正数")
     state: dict = {
         "sent": 0,
         "recv": 0,
