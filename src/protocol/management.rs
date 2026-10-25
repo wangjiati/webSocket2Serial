@@ -5,6 +5,26 @@ use serde::{Deserialize, Deserializer, Serialize};
 use super::errors::ErrorBody;
 use super::SessionState;
 
+/// 校验位。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Parity {
+    None,
+    Odd,
+    Even,
+    Mark,
+    Space,
+}
+
+/// 流控。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FlowControl {
+    None,
+    Software,
+    Hardware,
+}
+
 /// `session.open` 参数。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -12,9 +32,9 @@ pub struct OpenParams {
     pub path: String,
     pub baud_rate: u32,
     pub data_bits: u8,
-    pub parity: String,
+    pub parity: Parity,
     pub stop_bits: u8,
-    pub flow_control: String,
+    pub flow_control: FlowControl,
     /// 打开后立即应用的 DTR 电平；缺省为驱动默认。
     #[serde(default)]
     pub dtr: Option<bool>,
@@ -184,9 +204,9 @@ pub struct PortInfo {
 pub struct SessionParams {
     pub baud_rate: u32,
     pub data_bits: u8,
-    pub parity: String,
+    pub parity: Parity,
     pub stop_bits: u8,
-    pub flow_control: String,
+    pub flow_control: FlowControl,
 }
 
 /// `session.list` 中的会话信息。

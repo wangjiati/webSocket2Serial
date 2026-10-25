@@ -13,8 +13,9 @@ pub use events::{
 };
 pub use management::{
     AdminSetParams, AdminState, CloseParams, CloseResult, Counters, DebugSubscribeParams,
-    DebugSubscribeResult, GapInfo, OpenParams, OpenResult, PortInfo, PortsListResult, SessionInfo,
-    SessionListResult, SessionParams, SessionSelector, WriteParams, WriteResult,
+    DebugSubscribeResult, FlowControl, GapInfo, OpenParams, OpenResult, Parity, PortInfo,
+    PortsListResult, SessionInfo, SessionListResult, SessionParams, SessionSelector, WriteParams,
+    WriteResult,
 };
 
 /// 管理请求：`{"id":"...","action":"...","params":{...}}`。

@@ -13,14 +13,19 @@ use super::SessionState;
 #[serde(tag = "event", content = "data", rename_all = "snake_case")]
 pub enum Event {
     /// 管理连接建立。
+    #[serde(rename = "hello")]
     Hello(HelloData),
     /// 热插拔轮询发现串口变化。
+    #[serde(rename = "ports.changed")]
     PortsChanged(PortsChangedData),
     /// 会话状态迁移。
+    #[serde(rename = "session.state")]
     SessionState(SessionStateData),
     /// 已订阅会话的收发调试帧。
+    #[serde(rename = "debug.frame")]
     DebugFrame(DebugFrameData),
     /// 管理页服务开关变化。
+    #[serde(rename = "admin.state")]
     AdminState(AdminState),
 }
 
