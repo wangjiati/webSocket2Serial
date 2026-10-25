@@ -72,6 +72,9 @@ fs2 = "0.4"
 
 [dev-dependencies]
 tempfile = "3"
+# 测试用 `tokio::time::advance` 与 `#[tokio::test(start_paused = true)]`（任务 6/7 超时用例），
+# 与主依赖统一锁定到 1.38.0（test-util 仅编译测试目标，不影响产物/MSRV）。
+tokio = { version = "=1.38.0", features = ["test-util"] }
 # MSRV 锁定：tempfile 传递依赖的 fastrand 较新版本用 getrandom 0.4（edition 2024）。
 # 固定 fastrand 到仍用 getrandom 0.2 的版本。
 fastrand = "=2.1.0"

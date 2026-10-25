@@ -6,10 +6,18 @@
 #![allow(dead_code)]
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use tokio::sync::broadcast;
+
+use websocket2serial::config::SessionConfig;
+use websocket2serial::protocol::{FlowControl, OpenParams, OpenResult, Parity};
 use websocket2serial::serial::{SerialParams, SerialTransport, TransportError, TransportFactory};
+use websocket2serial::session::{
+    DataError, DataListenerFactory, DataListenerHandle, Session, SessionManager,
+};
 
 /// 假串口：多个线程通过同一个 `Arc<Mutex<FakeState>>` 观察/修改状态。
 #[derive(Debug, Clone, Default)]
@@ -202,4 +210,84 @@ impl TransportFactory for FakeTransportFactory {
         state.opens.push(params.clone());
         Ok(Box::new(transport))
     }
+}
+
+/// 假数据监听器：`bind` 分配一个递增的临时端口，`shutdown` 无实际操作。
+/// 用 `AtomicU16` 保证每次复用会话都会得到不同的端口（从而 URL 也不同）。
+#[derive(Debug, Default)]
+pub struct FakeDataListener {
+    next_port: AtomicU16,
+    bind_count: AtomicUsize,
+}
+
+impl FakeDataListener {
+    pub fn new() -> Self {
+        Self {
+            next_port: AtomicU16::new(20_000),
+            bind_count: AtomicUsize::new(0),
+        }
+    }
+
+    pub fn bind_count(&self) -> usize {
+        self.bind_count.load(Ordering::SeqCst)
+    }
+}
+
+impl DataListenerFactory for FakeDataListener {
+    fn bind(&self, _session: Arc<Session>) -> Result<DataListenerHandle, DataError> {
+        self.bind_count.fetch_add(1, Ordering::SeqCst);
+        let port = self.next_port.fetch_add(1, Ordering::SeqCst);
+        Ok(DataListenerHandle {
+            port,
+            shutdown: Box::new(|| {}),
+        })
+    }
+}
+
+/// 构造一个带假串口/假数据监听器的 `SessionManager`（默认 `max_sessions`）。
+pub fn test_manager() -> (SessionManager, Arc<FakeTransportFactory>) {
+    test_manager_with_max_sessions(8)
+}
+
+/// 构造一个指定 `max_sessions` 的测试管理器。
+pub fn test_manager_with_max_sessions(
+    max_sessions: usize,
+) -> (SessionManager, Arc<FakeTransportFactory>) {
+    let cfg = SessionConfig {
+        max_sessions,
+        ..SessionConfig::default()
+    };
+    let factory = Arc::new(FakeTransportFactory::new());
+    let (events, _) = broadcast::channel(16);
+    let mgr = SessionManager::new(
+        factory.clone(),
+        Arc::new(FakeDataListener::new()),
+        cfg,
+        events,
+    );
+    (mgr, factory)
+}
+
+/// 生成一组可用的 `session.open` 参数。
+pub fn sample_open(path: &str) -> OpenParams {
+    OpenParams {
+        path: path.to_string(),
+        baud_rate: 115_200,
+        data_bits: 8,
+        parity: Parity::None,
+        stop_bits: 1,
+        flow_control: FlowControl::None,
+        dtr: None,
+        rts: None,
+    }
+}
+
+/// 从 `OpenResult.data_url` 里取回 token（URL 形如 `ws://127.0.0.1:<port>/ws/<token>`）。
+pub fn token_of(result: &OpenResult) -> String {
+    result
+        .data_url
+        .rsplit('/')
+        .next()
+        .expect("data_url 缺少 token")
+        .to_string()
 }

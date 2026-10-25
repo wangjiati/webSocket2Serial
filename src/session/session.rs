@@ -14,7 +14,7 @@ use crate::config::SessionConfig;
 use crate::protocol::{
     Counters, DebugFrame, ErrorBody, Event, GapInfo, SessionInfo, SessionParams, SessionState,
 };
-use crate::serial::SerialParams;
+use crate::serial::{SerialParams, SerialTransport};
 
 use super::debug_ring::DebugRing;
 
@@ -129,6 +129,8 @@ pub struct Session {
     rx: Mutex<Option<mpsc::Receiver<Vec<u8>>>>,
     /// 网页 → 串口的数据块发送端（数据 WS 每次 attach 克隆一份）。
     tx: mpsc::Sender<Vec<u8>>,
+    /// 串口传输对象；任务 7 的读/写线程从这里取走并接线。
+    transport: Mutex<Option<Box<dyn SerialTransport>>>,
 }
 
 impl Session {
@@ -139,6 +141,18 @@ impl Session {
         cfg: SessionConfig,
         events: broadcast::Sender<Event>,
         closed_tx: mpsc::UnboundedSender<String>,
+    ) -> Self {
+        Self::with_transport(id, params, cfg, events, closed_tx, None)
+    }
+
+    /// 创建 awaiting 会话并持有串口传输对象（任务 6 管理器传入；任务 7 接线）。
+    pub fn with_transport(
+        id: impl Into<String>,
+        params: SerialParams,
+        cfg: SessionConfig,
+        events: broadcast::Sender<Event>,
+        closed_tx: mpsc::UnboundedSender<String>,
+        transport: Option<Box<dyn SerialTransport>>,
     ) -> Self {
         let id = id.into();
         let created_at = now_ms();
@@ -177,6 +191,7 @@ impl Session {
             debug_seq: AtomicU64::new(1),
             rx: Mutex::new(Some(rx)),
             tx,
+            transport: Mutex::new(transport),
         }
     }
 
@@ -254,6 +269,28 @@ impl Session {
         self.data_port.load(Ordering::Relaxed)
     }
 
+    /// 清空 awaiting 连接截止时间（进入 active 后不再显示 `connectBy`）。
+    pub fn clear_connect_by(&self) {
+        self.inner.lock().unwrap().connect_by = None;
+    }
+
+    /// 刷新 awaiting 连接截止时间（复用 awaiting 会话时重置 5s 截止）。
+    pub fn refresh_connect_by(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.connect_by = Some(now_ms() + self.cfg.connect_timeout_ms);
+    }
+
+    /// 取走串口传输对象（任务 7 读/写线程接线用）；仅能取一次。
+    pub fn take_transport(&self) -> Option<Box<dyn SerialTransport>> {
+        self.transport.lock().unwrap().take()
+    }
+
+    /// 当前串口传输对象是否仍在本会话（未被取走）。
+    #[allow(dead_code)]
+    pub fn has_transport(&self) -> bool {
+        self.transport.lock().unwrap().is_some()
+    }
+
     /// 数据 WS 附加：`awaiting`/`grace` → `active`，返回收发通道。
     pub fn attach(&self) -> Result<AttachedData, SessionError> {
         {
@@ -325,6 +362,11 @@ impl Session {
     /// 订阅关闭通知（数据 WS 据此发送 close code 并退出）。
     pub fn close_subscribe(&self) -> watch::Receiver<Option<CloseReason>> {
         self.close_rx.clone()
+    }
+
+    /// 当前关闭原因；尚未关闭时为 `None`（会话自关后 manager 据此发 `session.state`）。
+    pub fn close_reason(&self) -> Option<CloseReason> {
+        *self.close_rx.borrow()
     }
 
     /// 分配下一个调试帧序号（从 1 递增）。
