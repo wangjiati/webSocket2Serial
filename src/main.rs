@@ -130,13 +130,15 @@ async fn main() {
             warn!(error = %err, "管理页服务启动失败（不影响管理 WS）");
         }
     }
+    // 运行时管理页开关状态：托盘菜单展示用，随托盘动作与 AdminState 事件同步。
+    let mut admin_enabled = admin.status().enabled;
 
     // 托盘。
     let initial = current_tray_state(
         app.management_port,
         &HashMap::new(),
         &None,
-        admin.status().enabled,
+        admin_enabled,
         autostart_enabled,
     );
     let (mut tray_handle, mut action_rx) =
@@ -175,8 +177,9 @@ async fn main() {
             action = action_rx.recv() => {
                 match action {
                     Some(TrayAction::OpenAdmin) => {
-                        if !app.state.admin.status().enabled {
-                            app.state.admin.set_enabled(true).await;
+                        if !admin_enabled {
+                            let state = app.state.admin.set_enabled(true).await;
+                            admin_enabled = state.enabled;
                         }
                         let url = app.state.admin.status().url;
                         if !url.is_empty() {
@@ -189,18 +192,19 @@ async fn main() {
                             app.management_port,
                             &sessions,
                             &last_error,
-                            app.state.admin.status().enabled,
+                            admin_enabled,
                             autostart_enabled,
                         ));
                     }
                     Some(TrayAction::SetAdmin(enabled)) => {
                         let state = app.state.admin.set_enabled(enabled).await;
+                        admin_enabled = state.enabled;
                         let _ = app.state.events.send(Event::AdminState(state));
                         tray_handle.send_state(current_tray_state(
                             app.management_port,
                             &sessions,
                             &last_error,
-                            app.state.admin.status().enabled,
+                            admin_enabled,
                             autostart_enabled,
                         ));
                     }
@@ -213,7 +217,7 @@ async fn main() {
                                     app.management_port,
                                     &sessions,
                                     &last_error,
-                                    app.state.admin.status().enabled,
+                                    admin_enabled,
                                     autostart_enabled,
                                 ));
                             }
@@ -253,7 +257,18 @@ async fn main() {
                             app.management_port,
                             &sessions,
                             &last_error,
-                            app.state.admin.status().enabled,
+                            admin_enabled,
+                            autostart_enabled,
+                        ));
+                    }
+                    Ok(Event::AdminState(state)) => {
+                        // 管理页开关（含网页 admin.set）同步到托盘菜单。
+                        admin_enabled = state.enabled;
+                        tray_handle.send_state(current_tray_state(
+                            app.management_port,
+                            &sessions,
+                            &last_error,
+                            admin_enabled,
                             autostart_enabled,
                         ));
                     }

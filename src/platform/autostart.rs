@@ -11,6 +11,19 @@ pub const APP_NAME: &str = "WebSocket2Serial";
 /// Windows 当前用户 Run 键路径。
 pub const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 
+/// Windows Run 键值：把 exe 路径按命令行引用规则转成字符串。
+///
+/// 含空格/制表符的路径用双引号包裹，保证被系统当作单个命令行参数解析；
+/// 不含特殊字符时原样返回。若未来追加参数，需在此按命令行引用规则一并处理。
+pub fn windows_run_value(path: &Path) -> String {
+    let path = path.display().to_string();
+    if path.contains(' ') || path.contains('\t') {
+        format!("\"{path}\"")
+    } else {
+        path
+    }
+}
+
 /// Linux `.desktop` 自启条目内容（纯函数，可跨平台测试）。
 pub fn desktop_entry(exe_path: &Path) -> String {
     format!(
@@ -22,8 +35,33 @@ pub fn desktop_entry(exe_path: &Path) -> String {
          Terminal=false\n\
          X-GNOME-Autostart-enabled=true\n",
         APP_NAME,
-        exe_path.display()
+        desktop_exec_quote(&exe_path.display().to_string())
     )
+}
+
+/// Desktop Entry 规范 `Exec=` 参数的引号/转义。
+///
+/// 参数含保留字符（空格、制表符、引号、反斜杠、反引号、`$` 等）时整体加双引号，
+/// 并在引号内对 `"`、`` ` ``、`$`、`\` 前置反斜杠转义。
+fn desktop_exec_quote(arg: &str) -> String {
+    const RESERVED: &[char] = &[
+        ' ', '\t', '\n', '"', '\'', '\\', '>', '<', '~', '|', '&', ';', '$', '*', '?', '#', '(',
+        ')', '`',
+    ];
+    if arg.is_empty() || arg.chars().any(|c| RESERVED.contains(&c)) {
+        let mut out = String::with_capacity(arg.len() + 2);
+        out.push('"');
+        for c in arg.chars() {
+            if matches!(c, '"' | '`' | '$' | '\\') {
+                out.push('\\');
+            }
+            out.push(c);
+        }
+        out.push('"');
+        out
+    } else {
+        arg.to_string()
+    }
 }
 
 /// 当前自启状态。
@@ -109,7 +147,7 @@ fn windows_set(enabled: bool) -> io::Result<()> {
     let (run, _) = hkcu.create_subkey(RUN_KEY)?;
     if enabled {
         let exe = std::env::current_exe()?;
-        run.set_value(APP_NAME, &exe.display().to_string())
+        run.set_value(APP_NAME, &windows_run_value(&exe))
     } else {
         match run.delete_value(APP_NAME) {
             Ok(()) => Ok(()),
