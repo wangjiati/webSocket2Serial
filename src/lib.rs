@@ -6,6 +6,7 @@ pub mod cli;
 pub mod config;
 pub mod logging;
 pub mod paths;
+pub mod protocol;
 
 pub use cli::Cli;
 pub use config::{Config, OriginAllowlist};
