@@ -138,6 +138,7 @@ async fn data_ws_upgrade(
 
     let session_id = state.session.id().to_string();
     upgrade
+        .max_message_size(state.max_frame_bytes)
         .on_upgrade(move |socket| async move {
             run_data_loop(state, session_id, token, socket).await;
         })
@@ -240,7 +241,31 @@ async fn run_data_loop(
                         }
                         return;
                     }
-                    Some(Err(_)) | None => {
+                    Some(Err(err)) => {
+                        // 客户端异常断开：归还接收器并进入宽限（细节见任务 9）。
+                        // 特例：升级阶段 max_message_size 拒绝超大帧会以
+                        // `Error::Capacity(MessageTooLong)` 暴露，此时补发 1009
+                        // 再进入宽限，保持与既有行为一致（不静默 EOF）。
+                        let too_big = err
+                            .into_inner()
+                            .downcast_ref::<tungstenite::Error>()
+                            .map(|e| {
+                                matches!(
+                                    e,
+                                    tungstenite::Error::Capacity(
+                                        tungstenite::error::CapacityError::MessageTooLong { .. }
+                                    )
+                                )
+                            })
+                            .unwrap_or(false);
+                        if too_big {
+                            let _ = sender.send(close_message(CloseCode::MessageTooBig.as_u16())).await;
+                        }
+                        state.session.return_rx(rx);
+                        let _ = manager.enter_grace(&session_id).await;
+                        return;
+                    }
+                    None => {
                         // 客户端异常断开：归还接收器并进入宽限（细节见任务 9）。
                         state.session.return_rx(rx);
                         let _ = manager.enter_grace(&session_id).await;

@@ -440,12 +440,57 @@ fn wide(s: &str) -> Vec<u16> {
 }
 
 /// 把 `&str` 复制到固定长度 UTF-16 缓冲（保留 NUL 结尾）。
+///
+/// 超出缓冲容量的部分被截断；复制结束位置始终写入 NUL，保证短串覆盖长串时
+/// 不残留旧尾部（tooltip/气泡短串覆盖长串场景）。
 fn copy_wide(dst: &mut [u16], s: &str) {
     if dst.is_empty() {
         return;
     }
-    let max = dst.len() - 1;
-    for (d, src) in dst.iter_mut().zip(s.encode_utf16().take(max)) {
-        *d = src;
+    let mut n = 0;
+    for unit in s.encode_utf16() {
+        if n >= dst.len() {
+            break;
+        }
+        dst[n] = unit;
+        n += 1;
+    }
+    // 在复制结束处写 NUL；n < dst.len() 时覆盖旧尾部首个单元，否则写最后单元。
+    dst[dst.len() - 1] = 0;
+    if n < dst.len() {
+        dst[n] = 0;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::copy_wide;
+
+    #[test]
+    fn copy_wide_short_string_clears_stale_tail() {
+        // 先写入较长字符串，再写较短字符串：旧尾部必须被 NUL 截断，不残留。
+        let mut buf = [0u16; 8];
+        copy_wide(&mut buf, "abcdef");
+        assert_eq!(&buf[..4], &[0x61, 0x62, 0x63, 0x64]);
+        assert_eq!(buf[6], 0);
+
+        copy_wide(&mut buf, "xy");
+        // 前两个单元为新串，第 3 个单元被 NUL 覆盖——Win32 读到此处即视为终止，
+        // 旧尾部不再参与字符串内容（缓冲尾部不必逐单元清零）。
+        assert_eq!(&buf[..3], &[0x78, 0x79, 0]);
+    }
+
+    #[test]
+    fn copy_wide_truncates_and_nul_terminates() {
+        let mut buf = [0u16; 3];
+        copy_wide(&mut buf, "abcdef");
+        // 容量 3：前 2 个单元为字符，最后单元为 NUL（截断）。
+        assert_eq!(&buf[..3], &[0x61, 0x62, 0]);
+    }
+
+    #[test]
+    fn copy_wide_empty_buffer_is_noop() {
+        let mut buf: [u16; 0] = [];
+        copy_wide(&mut buf, "abc");
     }
 }

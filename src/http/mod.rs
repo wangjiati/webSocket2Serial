@@ -179,6 +179,10 @@ impl AdminController for AdminService {
         AdminService::status(self)
     }
 
+    fn autostart(&self) -> bool {
+        self.autostart.load(Ordering::SeqCst)
+    }
+
     fn set_enabled(&self, enabled: bool) -> Pin<Box<dyn Future<Output = AdminState> + Send + '_>> {
         Box::pin(async move {
             match AdminService::set_enabled(self, enabled).await {

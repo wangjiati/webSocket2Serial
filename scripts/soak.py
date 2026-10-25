@@ -21,6 +21,9 @@
   - 发送内容为 0..255 循环字节流，绝对偏移 n 的期望字节为 n & 0xFF，O(1) 内存逐字节校验。
   - 回环要求 TX 与 RX 短接（或对端回显设备），否则收不到数据、脚本按错配/无数据退出。
   - 每次强制重连：干净关闭数据连接（1000）释放串口，再 session.open 重新接回，重复 N 次。
+  - 校验按「阶段」进行：每个 open/close/reopen 阶段内连续校验 0..255 流，阶段间不跨阶段比对。
+    规格规定干净关闭（1000）立即销毁并丢弃在途字节，因此下一阶段首字节偏移会跳变，
+    跨阶段累计比对必然误报；宽限恢复（异常断开的丢字节恢复）由集成测试覆盖，不在本脚本验证。
 """
 
 from __future__ import annotations
@@ -189,6 +192,10 @@ async def _run(args, state: dict) -> None:
             sys.stderr.write(
                 f"[soak] 会话 {result.get('sessionId')}（reused={result.get('reused')}）\n"
             )
+            # 每阶段重置期望偏移：阶段内连续校验 0..255 流，不跨阶段比对。
+            # 干净关闭（1000）会丢弃在途字节，下一阶段首字节偏移跳变，跨阶段累计必误报。
+            state["sent"] = 0
+            state["recv"] = 0
             async with _connect(data_url) as data:
                 await _counting_loop(data, args, state, min(deadline, phase_end))
             # 计数循环结束：仍在总时长内则计入一次重连并进入下一阶段。
@@ -230,7 +237,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--reconnects", type=int, default=DEFAULT_RECONNECTS,
-        help=f"总时长内强制断线重连次数（默认 {DEFAULT_RECONNECTS}）",
+        help=(
+            f"总时长内强制断线重连次数（默认 {DEFAULT_RECONNECTS}）。"
+            "每个阶段独立校验 0..255 流；干净关闭会丢弃在途字节，"
+            "阶段间首字节偏移会跳变，因此不跨阶段比对（宽限恢复由集成测试覆盖）"
+        ),
     )
     parser.add_argument("--chunk", type=int, default=DEFAULT_CHUNK, help="每次发送字节数")
     parser.add_argument("--pause", type=float, default=DEFAULT_PAUSE, help="发送间隔秒数")

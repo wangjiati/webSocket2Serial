@@ -1839,6 +1839,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "tungstenite 0.24.0",
  "url",
  "uuid",
  "windows-sys 0.52.0",

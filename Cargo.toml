@@ -41,6 +41,9 @@ uuid = { version = "=1.11.0", features = ["v4"] }
 futures-util = "0.3"
 dirs = "5"
 open = "5"
+# 数据 WS 在升级阶段用 max_message_size 拒绝超大帧；读取侧据此识别
+# `Error::Capacity(MessageTooLong)` 以补发 1009（与 axum 0.7 传递依赖的 0.24 一致）。
+tungstenite = "0.24"
 # clap 较新的 4.5.x 把 clap_lex 抬到 1.1.1（edition 2024）。固定到早期 4.5.x，
 # 其 clap_lex 仍为 edition 2021 的 0.7 系列。
 clap = { version = "=4.5.4", features = ["derive"] }

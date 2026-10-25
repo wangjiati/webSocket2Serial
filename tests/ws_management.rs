@@ -103,6 +103,11 @@ impl App {
 }
 
 async fn test_app() -> App {
+    test_app_with_autostart(false).await
+}
+
+/// 与 [`test_app`] 相同，但可显式设置 fake 管理控制器的自启状态。
+async fn test_app_with_autostart(autostart: bool) -> App {
     let serial = FakeTransport::new();
     let transport_factory = Arc::new(FakeTransportFactory::with_transport(serial.clone()));
     let origins = OriginAllowlist::new(&[
@@ -130,6 +135,7 @@ async fn test_app() -> App {
         ..Config::default()
     };
     let admin = Arc::new(FakeAdminController::new());
+    admin.set_autostart(autostart);
     let scanner = Arc::new(FakeScanner::new());
     let built = build_app(config, manager, admin, scanner.clone(), events).unwrap();
     App {
@@ -288,6 +294,23 @@ async fn wait_state(app: &App, id: &str, expected: SessionState) {
         );
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
+}
+
+#[tokio::test]
+async fn hello_reflects_autostart_state() {
+    // 自启状态为 true 时，hello.autostart 应为 true。
+    let app = test_app_with_autostart(true).await;
+    let mut ws = connect_management(&app).await;
+    let hello = next_event(&mut ws).await;
+    assert_eq!(hello["event"], "hello");
+    assert_eq!(hello["data"]["autostart"], true);
+
+    // 自启状态为 false 时，hello.autostart 应为 false。
+    let app = test_app_with_autostart(false).await;
+    let mut ws = connect_management(&app).await;
+    let hello = next_event(&mut ws).await;
+    assert_eq!(hello["event"], "hello");
+    assert_eq!(hello["data"]["autostart"], false);
 }
 
 #[tokio::test]

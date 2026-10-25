@@ -35,6 +35,8 @@ pub struct AppState {
 /// `tests/common` 的 `FakeAdminController`。
 pub trait AdminController: Send + Sync {
     fn status(&self) -> AdminState;
+    /// 当前开机自启状态（单一真值源，供 `hello.autostart` 上报）。
+    fn autostart(&self) -> bool;
     fn set_enabled(&self, enabled: bool) -> Pin<Box<dyn Future<Output = AdminState> + Send + '_>>;
 }
 

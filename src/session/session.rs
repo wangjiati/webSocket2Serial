@@ -71,7 +71,7 @@ impl CloseReason {
             CloseReason::Backpressure => "BACKPRESSURE",
             CloseReason::GraceTimeout => "GRACE_TIMEOUT",
             CloseReason::AwaitingTimeout => "SESSION_EXPIRED",
-            CloseReason::Shutdown => "SHUTDOWN",
+            CloseReason::Shutdown => "SERVER_SHUTDOWN",
         }
     }
 }

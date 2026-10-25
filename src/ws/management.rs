@@ -40,6 +40,8 @@ use super::serve_with_nodelay;
 const WRITE_QUEUE: usize = 256;
 /// `session.write` 单次数据上限（64 KiB）。
 const WRITE_MAX_BYTES: usize = 64 * 1024;
+/// 管理 WS 单条消息上限（1 MiB）：在升级阶段即拒绝超大帧，避免先分配再丢弃。
+const MANAGEMENT_MAX_MESSAGE: usize = 1024 * 1024;
 /// 心跳 Ping 间隔。
 const HEARTBEAT_PING: Duration = Duration::from_secs(5);
 /// 无 Pong 判死阈值。
@@ -127,6 +129,7 @@ async fn upgrade_management(
     }
     let app = Arc::clone(&state.app);
     upgrade
+        .max_message_size(MANAGEMENT_MAX_MESSAGE)
         .on_upgrade(move |socket| async move {
             run_management_loop(app, socket).await;
         })
@@ -346,8 +349,7 @@ fn hello_data(app: &AppState) -> HelloData {
         arch: std::env::consts::ARCH.to_string(),
         management_port: app.config.server.management_port,
         admin: app.admin.status(),
-        // 任务 14 接入真实自启状态。
-        autostart: false,
+        autostart: app.admin.autostart(),
     }
 }
 

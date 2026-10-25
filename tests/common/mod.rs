@@ -550,10 +550,12 @@ impl PortScanner for FakeScanner {
     }
 }
 
-/// 假管理页控制器：`status`/`set_enabled` 只改内存中的 `AdminState`。
+/// 假管理页控制器：`status`/`set_enabled` 只改内存中的 `AdminState`，
+/// `autostart` 可显式设置（默认 false）供 `hello.autostart` 测试。
 #[derive(Debug)]
 pub struct FakeAdminController {
     state: Mutex<AdminState>,
+    autostart: AtomicBool,
 }
 
 impl FakeAdminController {
@@ -563,13 +565,23 @@ impl FakeAdminController {
                 enabled: true,
                 url: "http://127.0.0.1:8766/".to_string(),
             }),
+            autostart: AtomicBool::new(false),
         }
+    }
+
+    /// 设置自启状态（`hello.autostart` 的单一真值源）。
+    pub fn set_autostart(&self, enabled: bool) {
+        self.autostart.store(enabled, Ordering::SeqCst);
     }
 }
 
 impl AdminController for FakeAdminController {
     fn status(&self) -> AdminState {
         self.state.lock().unwrap().clone()
+    }
+
+    fn autostart(&self) -> bool {
+        self.autostart.load(Ordering::SeqCst)
     }
 
     fn set_enabled(&self, enabled: bool) -> Pin<Box<dyn Future<Output = AdminState> + Send + '_>> {

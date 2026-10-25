@@ -204,7 +204,7 @@
 | `state` | string | 新状态 |
 | `port` | string | 串口路径 |
 | `params` | SessionParams | 参数 |
-| `reason` | string \| 缺省 | 关闭原因（`CLIENT_CLOSED`/`ADMIN_CLOSED`/`DEVICE_LOST`/`WRITE_TIMEOUT`/`SERIAL_IO_ERROR`/`BACKPRESSURE`/`GRACE_TIMEOUT`/`SESSION_EXPIRED`/`SHUTDOWN`） |
+| `reason` | string \| 缺省 | 关闭原因（`CLIENT_CLOSED`/`ADMIN_CLOSED`/`DEVICE_LOST`/`WRITE_TIMEOUT`/`SERIAL_IO_ERROR`/`BACKPRESSURE`/`GRACE_TIMEOUT`/`SESSION_EXPIRED`/`SERVER_SHUTDOWN`） |
 | `closeCode` | number \| 缺省 | 对应的数据面 close code（无数据连接时缺省） |
 | `graceEndsAt` | number \| 缺省 | 宽限截止时间 |
 | `counters` | Counters | 计数 |
