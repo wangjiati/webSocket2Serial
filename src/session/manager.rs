@@ -6,7 +6,7 @@
 //!
 //! [`close`]: SessionManager::close
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -121,6 +121,9 @@ struct ManagerShared {
     ports: Mutex<HashMap<String, String>>,
     sessions: Mutex<HashMap<String, Arc<Session>>>,
     handles: Mutex<HashMap<String, SessionHandle>>,
+    /// 正在打开的 path 占位集：并发 open 与 max_sessions 计数都把它算在内，
+    /// 避免「检查 → spawn_blocking 让出 → 插入」之间出现竞态。
+    opening: Mutex<HashSet<String>>,
 }
 
 struct ManagerInner {
@@ -149,6 +152,7 @@ impl SessionManager {
             ports: Mutex::new(HashMap::new()),
             sessions: Mutex::new(HashMap::new()),
             handles: Mutex::new(HashMap::new()),
+            opening: Mutex::new(HashSet::new()),
         });
         let (closed_tx, mut closed_rx) = mpsc::unbounded_channel();
         let inner = Arc::new(ManagerInner { shared, closed_tx });
@@ -182,45 +186,62 @@ impl SessionManager {
         let shared = Arc::clone(&self.inner.shared);
         let path = serial.path.clone();
 
-        // 先查端口锁：不存在才需要真正打开串口。
-        let existing_id = {
+        // 第一步：原子地检查「已有会话 / 正在打开 / 上限」并预先占位（不 await）。
+        // 占位计入 max_sessions，避免并发 open 在 spawn_blocking 让出期间绕过端口独占与上限。
+        enum Reserved {
+            Reuse(Arc<Session>),
+            Open,
+        }
+
+        let reserved = {
             let ports = shared.ports.lock().unwrap();
-            ports.get(&path).cloned()
+            let sessions = shared.sessions.lock().unwrap();
+            let mut opening = shared.opening.lock().unwrap();
+
+            if let Some(session_id) = ports.get(&path).cloned() {
+                Reserved::Reuse(
+                    sessions
+                        .get(&session_id)
+                        .cloned()
+                        .ok_or(ManagerError::SessionNotFound)?,
+                )
+            } else if opening.contains(&path) {
+                // 并发 open 同一 path：占位已存在，后来者视为占用。
+                return Err(ManagerError::PortBusy);
+            } else if sessions.len() + opening.len() >= shared.cfg.max_sessions {
+                return Err(ManagerError::LimitExceeded);
+            } else {
+                opening.insert(path.clone());
+                Reserved::Open
+            }
         };
 
-        if let Some(session_id) = existing_id {
-            let session = shared
-                .sessions
-                .lock()
-                .unwrap()
-                .get(&session_id)
-                .cloned()
-                .ok_or(ManagerError::SessionNotFound)?;
-            match session.state() {
+        // 复用路径：不经过 await，直接轮换 token 返回原会话。
+        if let Reserved::Reuse(session) = reserved {
+            return match session.state() {
                 SessionState::Awaiting | SessionState::Grace => {
-                    return ManagerShared::reuse(&shared, &session).await;
+                    ManagerShared::reuse(&shared, &session)
                 }
-                SessionState::Active => return Err(ManagerError::PortBusy),
-                SessionState::Closed => return Err(ManagerError::SessionNotFound),
-            }
+                SessionState::Active => Err(ManagerError::PortBusy),
+                SessionState::Closed => Err(ManagerError::SessionNotFound),
+            };
         }
 
-        // 新会话：先检查最大会话数。
-        {
-            let sessions = shared.sessions.lock().unwrap();
-            if sessions.len() >= shared.cfg.max_sessions {
-                return Err(ManagerError::LimitExceeded);
-            }
-        }
-
-        // 打开串口（阻塞调用放到 spawn_blocking）。
+        // 已占位：打开串口（阻塞调用放到 spawn_blocking）。
         let transport = {
             let factory = Arc::clone(&shared.transport_factory);
             let serial = serial.clone();
-            tokio::task::spawn_blocking(move || factory.open(&serial))
-                .await
-                .map_err(|e| ManagerError::SerialOpenFailed(e.to_string()))?
-                .map_err(map_transport_error)?
+            match tokio::task::spawn_blocking(move || factory.open(&serial)).await {
+                Ok(Ok(transport)) => transport,
+                Ok(Err(err)) => {
+                    shared.release_reservation(&path);
+                    return Err(map_transport_error(err));
+                }
+                Err(err) => {
+                    shared.release_reservation(&path);
+                    return Err(ManagerError::SerialOpenFailed(err.to_string()));
+                }
+            }
         };
 
         // 生成会话并绑定数据监听器。
@@ -236,26 +257,26 @@ impl SessionManager {
         let handle = match shared.listener_factory.bind(Arc::clone(&session)) {
             Ok(handle) => handle,
             Err(e) => {
-                // 监听绑定失败：丢弃串口传输释放端口。
+                // 监听绑定失败：丢弃串口传输释放端口，并移除占位。
                 drop(session.take_transport());
+                shared.release_reservation(&path);
                 return Err(ManagerError::SerialOpenFailed(e.to_string()));
             }
         };
         let port = handle.port;
         session.set_data_port(port);
 
-        // 插入会话表 + 端口锁 + 句柄。
-        {
-            let mut sessions = shared.sessions.lock().unwrap();
-            sessions.insert(id.clone(), Arc::clone(&session));
-        }
-        {
-            let mut ports = shared.ports.lock().unwrap();
-            ports.insert(path, id.clone());
-        }
+        // 提交：把占位转成正式会话（原子地插入会话表 + 端口锁 + 句柄）。
         let deadline = Arc::new(Deadline::new());
         {
+            let mut ports = shared.ports.lock().unwrap();
+            let mut sessions = shared.sessions.lock().unwrap();
+            let mut opening = shared.opening.lock().unwrap();
             let mut handles = shared.handles.lock().unwrap();
+
+            opening.remove(&path);
+            sessions.insert(id.clone(), Arc::clone(&session));
+            ports.insert(path, id.clone());
             handles.insert(
                 id.clone(),
                 SessionHandle {
@@ -345,7 +366,9 @@ impl SessionManager {
 
 impl ManagerShared {
     /// 复用 awaiting/grace 会话：关闭旧监听器、轮换 token、绑定新监听器、重置截止。
-    async fn reuse(
+    ///
+    /// 同步实现，不经过 await，避免复用路径在 open 的占位锁之外再次让出。
+    fn reuse(
         shared: &Arc<ManagerShared>,
         session: &Arc<Session>,
     ) -> Result<OpenResult, ManagerError> {
@@ -467,6 +490,11 @@ impl ManagerShared {
         if let Some(handle) = handles.get(session_id) {
             handle.deadline.cancel();
         }
+    }
+
+    /// 移除 path 的打开占位（打开/绑定失败时清理，避免端口占位泄漏）。
+    fn release_reservation(&self, path: &str) {
+        self.opening.lock().unwrap().remove(path);
     }
 
     /// 启动定时任务：到点前重新读取截止，若被刷新则继续等待。

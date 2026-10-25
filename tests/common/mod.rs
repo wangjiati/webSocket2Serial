@@ -161,6 +161,40 @@ struct FactoryState {
     next_open_error: Option<TransportError>,
     transports: Vec<Arc<FakeTransport>>,
     opens: Vec<SerialParams>,
+    /// 若为 `Some`，下一次 `open` 会先发出 started 信号再阻塞，直到被 `release`。
+    open_gate: Option<OpenGate>,
+}
+
+/// 阻塞下一次 `open` 的闸门：open 进入后发 started，随后阻塞等 release。
+struct OpenGate {
+    started: tokio::sync::mpsc::Sender<()>,
+    release: std::sync::mpsc::Receiver<()>,
+}
+
+// `std::sync::mpsc::Receiver` 无 Debug；给 OpenGate 手动实现以保持
+// `FakeTransportFactory: Debug`（FactoryState 派生 Debug 需要）。
+impl std::fmt::Debug for OpenGate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpenGate").finish_non_exhaustive()
+    }
+}
+
+/// 测试侧持有的闸门句柄：可异步等待 open 已进入、可放行。
+pub struct OpenGateHandle {
+    started: tokio::sync::mpsc::Receiver<()>,
+    release: std::sync::mpsc::Sender<()>,
+}
+
+impl OpenGateHandle {
+    /// 等待下一次 `open` 进入工厂（已发出 started）。异步等待，不阻塞运行时。
+    pub async fn wait_started(&mut self) {
+        self.started.recv().await.expect("open 尚未进入工厂");
+    }
+
+    /// 放行被阻塞的 `open`。
+    pub fn release(self) {
+        let _ = self.release.send(());
+    }
 }
 
 impl FakeTransportFactory {
@@ -171,6 +205,20 @@ impl FakeTransportFactory {
     /// 下一次 `open` 返回指定错误（如 NotFound/PermissionDenied/Busy）。
     pub fn fail_next_open(&self, error: TransportError) {
         self.state.lock().unwrap().next_open_error = Some(error);
+    }
+
+    /// 让下一次 `open` 进入工厂后阻塞，返回闸门句柄供测试协调并发时序。
+    pub fn gate_next_open(&self) -> OpenGateHandle {
+        let (started_tx, started_rx) = tokio::sync::mpsc::channel(1);
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        self.state.lock().unwrap().open_gate = Some(OpenGate {
+            started: started_tx,
+            release: release_rx,
+        });
+        OpenGateHandle {
+            started: started_rx,
+            release: release_tx,
+        }
     }
 
     pub fn open_count(&self) -> usize {
@@ -200,12 +248,21 @@ impl FakeTransportFactory {
 
 impl TransportFactory for FakeTransportFactory {
     fn open(&self, params: &SerialParams) -> Result<Box<dyn SerialTransport>, TransportError> {
-        let mut state = self.state.lock().unwrap();
-        state.open_count += 1;
-        if let Some(error) = state.next_open_error.take() {
-            return Err(error);
+        let gate = {
+            let mut state = self.state.lock().unwrap();
+            state.open_count += 1;
+            if let Some(error) = state.next_open_error.take() {
+                return Err(error);
+            }
+            state.open_gate.take()
+        };
+        // 闸门阻塞放在锁外，避免占住 factory 锁。
+        if let Some(gate) = gate {
+            let _ = gate.started.try_send(());
+            let _ = gate.release.recv();
         }
         let transport = FakeTransport::new();
+        let mut state = self.state.lock().unwrap();
         state.transports.push(Arc::new(transport.clone()));
         state.opens.push(params.clone());
         Ok(Box::new(transport))

@@ -84,3 +84,55 @@ async fn reuse_resets_awaiting_deadline() {
     tokio::time::advance(Duration::from_secs(1)).await;
     assert!(mgr.list().await.is_empty());
 }
+
+#[tokio::test]
+async fn concurrent_open_same_path_is_exclusive() {
+    let (mgr, factory) = test_manager();
+    // 让第一次 open 进入工厂后阻塞，制造并发窗口。
+    let mut gate = factory.gate_next_open();
+
+    let mgr = std::sync::Arc::new(mgr);
+    let first_mgr = std::sync::Arc::clone(&mgr);
+    let first = tokio::spawn(async move { first_mgr.open(sample_open("COM3")).await });
+
+    // 等第一次 open 已占位并进入工厂，再发起第二次同 path open。
+    gate.wait_started().await;
+    let second = mgr.open(sample_open("COM3")).await;
+
+    gate.release();
+    let first = first.await.unwrap();
+
+    // 一次成功、一次 PortBusy；只有一次成功打开；端口锁归成功会话。
+    let opened = first.unwrap();
+    assert!(matches!(second.unwrap_err(), ManagerError::PortBusy));
+    assert_eq!(factory.open_count(), 1);
+    let list = mgr.list().await;
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].port, "COM3");
+    assert_eq!(list[0].session_id, opened.session_id);
+    // 端口锁已归成功会话：再次 open 走复用（而非新建）。
+    let again = mgr.open(sample_open("COM3")).await.unwrap();
+    assert!(again.reused);
+    assert_eq!(again.session_id, opened.session_id);
+}
+
+#[tokio::test]
+async fn concurrent_max_sessions_counts_reservation() {
+    let (mgr, factory) = test_manager_with_max_sessions(1);
+    // 让第一次 open 进入工厂后阻塞，此时它已占位并计入上限。
+    let mut gate = factory.gate_next_open();
+
+    let mgr = std::sync::Arc::new(mgr);
+    let first_mgr = std::sync::Arc::clone(&mgr);
+    let first = tokio::spawn(async move { first_mgr.open(sample_open("COM3")).await });
+
+    gate.wait_started().await;
+    let second = mgr.open(sample_open("COM4")).await;
+
+    gate.release();
+    let first = first.await.unwrap();
+
+    assert!(first.is_ok());
+    assert!(matches!(second.unwrap_err(), ManagerError::LimitExceeded));
+    assert_eq!(factory.open_count(), 1);
+}
