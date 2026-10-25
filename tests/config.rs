@@ -36,6 +36,20 @@ fn origin_allowlist_allows_loopback_and_rejects_remote() {
 }
 
 #[test]
+fn origin_allowlist_rejects_host_suffix_and_requires_port() {
+    let a = OriginAllowlist::new(&["http://127.0.0.1:*".into(), "http://localhost:*".into()]);
+    // 主机后缀注入必须拒绝：不能把 `127.0.0.1.evil.com` 当成 `127.0.0.1`。
+    assert!(!a.allows(Some("http://127.0.0.1.evil.com")));
+    assert!(!a.allows(Some("http://localhost.evil.com")));
+    // `:*` 通配只匹配带显式端口的 Origin，无端口的一律拒绝。
+    assert!(!a.allows(Some("http://127.0.0.1")));
+    assert!(!a.allows(Some("http://localhost")));
+    // scheme / host 大小写不敏感。
+    assert!(a.allows(Some("HTTP://127.0.0.1:3000")));
+    assert!(a.allows(Some("HTTP://LOCALHOST:8080")));
+}
+
+#[test]
 fn cli_admin_flag_is_parsed() {
     let cli = Cli::parse_from(["ws2serial", "--admin"]);
     assert!(cli.force_admin);

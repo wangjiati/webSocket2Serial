@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 /// 顶层配置。解析失败或文件缺失时回退到 [`Config::default`]。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -121,23 +122,25 @@ impl Default for LoggingConfig {
     }
 }
 
-/// Origin 白名单：支持精确匹配与 `prefix:*` 端口通配。
+/// Origin 白名单：支持精确匹配与 `scheme://host:*` 端口通配。
 ///
-/// - 单独 `*` 被拒绝（构造时忽略）。
-/// - `None`（如 `file://` 页面的 `Origin: null`）一律拒绝。
+/// 匹配规则：
+/// - scheme 与 host 大小写不敏感、精确相等；host 不允许后缀匹配。
+/// - `http://127.0.0.1:*` / `http://localhost:*` 只匹配「带显式端口」的 loopback Origin。
+/// - 精确条目按原样匹配（可含显式端口）。
+/// - 单独 `*` 被拒绝（构造时忽略）；`None`（如 `file://` 页面的 `Origin: null`）一律拒绝。
 #[derive(Debug, Clone)]
 pub struct OriginAllowlist {
-    entries: Vec<String>,
+    rules: Vec<OriginRule>,
 }
 
 impl OriginAllowlist {
-    /// 从条目构造；忽略非法的单独 `*`。
+    /// 从条目构造；忽略非法条目（含单独 `*` 与解析失败的值）。
     pub fn new(entries: &[String]) -> Self {
         Self {
-            entries: entries
+            rules: entries
                 .iter()
-                .filter(|entry| entry.as_str() != "*")
-                .cloned()
+                .filter_map(|entry| OriginRule::parse(entry))
                 .collect(),
         }
     }
@@ -148,13 +151,70 @@ impl OriginAllowlist {
             Some(origin) => origin,
             None => return false,
         };
-        self.entries.iter().any(|entry| {
-            if let Some(prefix) = entry.strip_suffix(":*") {
-                // 端口通配：`http://127.0.0.1:*` 匹配 `http://127.0.0.1:<任意端口>`。
-                origin.starts_with(prefix)
-            } else {
-                origin == entry
+        let origin = match Url::parse(origin) {
+            Ok(url) => url,
+            Err(_) => return false,
+        };
+        self.rules.iter().any(|rule| rule.matches(&origin))
+    }
+}
+
+/// 单条 Origin 匹配规则。
+#[derive(Debug, Clone)]
+enum OriginRule {
+    /// 精确匹配：scheme、host 精确相等，端口精确（`None` 表示无端口）。
+    Exact {
+        scheme: String,
+        host: String,
+        port: Option<u16>,
+    },
+    /// 端口通配：scheme、host 精确相等，Origin 必须带任意显式端口。
+    AnyPort { scheme: String, host: String },
+}
+
+impl OriginRule {
+    /// 解析一条白名单条目。返回 `None` 表示非法条目（单独 `*`、无 host、通配基址带端口等）。
+    fn parse(entry: &str) -> Option<Self> {
+        if entry == "*" {
+            return None;
+        }
+        if let Some(base) = entry.strip_suffix(":*") {
+            // 端口通配：基址必须不含端口（`http://127.0.0.1`），不允许 `http://h:80:*`。
+            let url = Url::parse(base).ok()?;
+            if url.port().is_some() {
+                return None;
             }
+            let host = url.host_str()?.to_ascii_lowercase();
+            return Some(OriginRule::AnyPort {
+                scheme: url.scheme().to_ascii_lowercase(),
+                host,
+            });
+        }
+        let url = Url::parse(entry).ok()?;
+        let host = url.host_str()?.to_ascii_lowercase();
+        Some(OriginRule::Exact {
+            scheme: url.scheme().to_ascii_lowercase(),
+            host,
+            port: url.port(),
         })
+    }
+
+    fn matches(&self, origin: &Url) -> bool {
+        let origin_host = match origin.host_str() {
+            Some(host) => host,
+            None => return false,
+        };
+        match self {
+            OriginRule::Exact { scheme, host, port } => {
+                origin.scheme().eq_ignore_ascii_case(scheme)
+                    && origin_host.eq_ignore_ascii_case(host)
+                    && *port == origin.port()
+            }
+            OriginRule::AnyPort { scheme, host } => {
+                origin.scheme().eq_ignore_ascii_case(scheme)
+                    && origin_host.eq_ignore_ascii_case(host)
+                    && origin.port().is_some()
+            }
+        }
     }
 }
