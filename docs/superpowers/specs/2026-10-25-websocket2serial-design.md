@@ -201,7 +201,7 @@ v1 只有 7 个动作：
 - `path`：Windows 为 `COM3`（`COM10` 及以上同样写 `COM10`，内部转换）；Linux 为 `/dev/ttyUSB0`。
 - `baudRate`：整数，>0；允许非标准值（如 250000），由平台驱动决定是否支持。
 - `dataBits`：5/6/7/8。
-- `parity`：`none` / `odd` / `even` / `mark` / `space`。
+- `parity`：`none` / `odd` / `even` / `mark` / `space`。v1 实际仅支持 `none`/`odd`/`even`；`mark`/`space` 协议值保留，但 `SerialParams::validate()` 会直接返回 `INVALID_PARAMS`（serialport 4.10.1 限制）。
 - `stopBits`：1 或 2（v1 不支持 1.5）。
 - `flowControl`：`none` / `software` / `hardware`。
 - `dtr`、`rts`：可选，打开后立即应用的初始电平；缺省为驱动默认。

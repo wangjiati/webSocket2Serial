@@ -19,6 +19,7 @@
 - 所有监听硬编码 `127.0.0.1`；配置不提供 `bind`；不做 TLS、不做管理鉴权 token、不做跨网络。
 - 串口参数只存在于内存与网页；配置文件只存工具设置，绝不写串口参数。
 - 数据 WS 只接受二进制帧；文本帧以 1003 关闭；不保证报文边界。
+- 串口 parity v1 仅支持 `none`/`odd`/`even`；`mark`/`space` 由 `SerialParams::validate()` 拒绝为 `INVALID_PARAMS`（serialport 4.10.1 限制）。
 - 每串口仅一个数据客户端；复用同一端口的非 `active` 会话时轮换 token，旧 URL 立即失效。
 - 默认值：连接超时 5000ms、宽限 10000ms、收/发队列各 1 MiB、最大会话 8、读超时 5ms、写停滞超时 5000ms、热插拔轮询 2000ms、心跳 5s/10s。
 - 管理协议固定 7 个动作：`ports.list`、`session.open`、`session.close`、`session.list`、`session.write`、`debug.subscribe`、`admin.set`。
