@@ -6,7 +6,7 @@
 #![allow(dead_code)]
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -428,4 +428,76 @@ pub async fn wait_closed(mgr: &SessionManager, session_id: &str) -> ClosedReason
         assert!(tokio::time::Instant::now() < deadline, "wait_closed 超时");
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
+}
+
+/// 在 drop 时置位 `dropped` 的串口包装，用于断言「串口对象已释放」。
+pub struct DropNotifyingTransport {
+    inner: Box<dyn SerialTransport>,
+    dropped: Arc<AtomicBool>,
+}
+
+impl DropNotifyingTransport {
+    pub fn new(inner: Box<dyn SerialTransport>, dropped: Arc<AtomicBool>) -> Self {
+        Self { inner, dropped }
+    }
+}
+
+impl Drop for DropNotifyingTransport {
+    fn drop(&mut self) {
+        self.dropped.store(true, Ordering::SeqCst);
+    }
+}
+
+impl SerialTransport for DropNotifyingTransport {
+    fn read(&mut self, buf: &mut [u8], timeout: Duration) -> Result<usize, TransportError> {
+        self.inner.read(buf, timeout)
+    }
+
+    fn write(&mut self, buf: &[u8], timeout: Duration) -> Result<usize, TransportError> {
+        self.inner.write(buf, timeout)
+    }
+
+    fn set_dtr(&mut self, level: bool) -> Result<(), TransportError> {
+        self.inner.set_dtr(level)
+    }
+
+    fn set_rts(&mut self, level: bool) -> Result<(), TransportError> {
+        self.inner.set_rts(level)
+    }
+}
+
+/// 在 `open` 时把内部传输包进 [`DropNotifyingTransport`] 的工厂。
+struct DropNotifyingFactory {
+    inner: FakeTransportFactory,
+    dropped: Arc<AtomicBool>,
+}
+
+impl TransportFactory for DropNotifyingFactory {
+    fn open(&self, params: &SerialParams) -> Result<Box<dyn SerialTransport>, TransportError> {
+        let inner = self.inner.open(params)?;
+        Ok(Box::new(DropNotifyingTransport::new(
+            inner,
+            Arc::clone(&self.dropped),
+        )))
+    }
+}
+
+/// 构造一个带 drop 通知的假串口管理器：`(mgr, fake, dropped)`。
+/// 会话的串口对象（`Box<dyn SerialTransport>`）被 drop 时 `dropped` 置位。
+pub fn test_manager_with_drop_notifying_serial() -> (SessionManager, FakeTransport, Arc<AtomicBool>)
+{
+    let fake = FakeTransport::new();
+    let dropped = Arc::new(AtomicBool::new(false));
+    let factory = Arc::new(DropNotifyingFactory {
+        inner: FakeTransportFactory::with_transport(fake.clone()),
+        dropped: Arc::clone(&dropped),
+    });
+    let (events, _) = broadcast::channel(16);
+    let mgr = SessionManager::new(
+        factory,
+        Arc::new(FakeDataListener::new()),
+        SessionConfig::default(),
+        events,
+    );
+    (mgr, fake, dropped)
 }

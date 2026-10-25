@@ -6,13 +6,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use common::{
-    sample_open, sample_params, test_manager_with_fake_serial, test_manager_with_small_rx_queue,
-    token_of, wait_closed, FakeTransport,
+    sample_open, sample_params, test_manager_with_drop_notifying_serial,
+    test_manager_with_fake_serial, test_manager_with_small_rx_queue, token_of, wait_closed,
+    FakeTransport,
 };
 use tokio::sync::{broadcast, mpsc};
 use websocket2serial::config::SessionConfig;
 use websocket2serial::serial::TransportError;
-use websocket2serial::session::Session;
+use websocket2serial::session::{CloseReason, Session};
+
+use std::sync::atomic::Ordering;
 
 #[tokio::test]
 async fn attach_delivers_pre_attach_banner() {
@@ -103,4 +106,47 @@ async fn grace_discards_and_resumes() {
         .unwrap()
         .unwrap();
     assert_eq!(got, b"TWO");
+}
+
+#[tokio::test]
+async fn writer_exits_on_shutdown_even_with_tx_clone() {
+    let (mgr, _fake, dropped) = test_manager_with_drop_notifying_serial();
+    let r = mgr.open(sample_open("COM3")).await.unwrap();
+    let attached = mgr.attach(&r.session_id, &token_of(&r)).await.unwrap();
+    // 保留一个 tx 克隆，模拟数据 WS 仍持有发送端、未 drop。
+    let retained_tx = attached.tx.clone();
+    drop(attached);
+
+    mgr.close(&r.session_id, CloseReason::AdminClosed)
+        .await
+        .unwrap();
+
+    // 写线程应通过独立 shutdown 信号退出，串口对象在 1s 内释放，不依赖 tx 克隆 drop。
+    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+    while !dropped.load(Ordering::SeqCst) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "串口未在 1s 内释放（写线程仍持有传输）"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    drop(retained_tx);
+}
+
+#[tokio::test]
+async fn close_does_not_block_runtime() {
+    let (mgr, _fake) = test_manager_with_fake_serial();
+    let r = mgr.open(sample_open("COM3")).await.unwrap();
+    let _attached = mgr.attach(&r.session_id, &token_of(&r)).await.unwrap();
+
+    let started = std::time::Instant::now();
+    mgr.close(&r.session_id, CloseReason::ClientClosed)
+        .await
+        .unwrap();
+    let elapsed = started.elapsed();
+
+    assert!(
+        elapsed < Duration::from_millis(200),
+        "close 阻塞运行时：{elapsed:?}"
+    );
 }

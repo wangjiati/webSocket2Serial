@@ -441,8 +441,12 @@ impl ManagerShared {
         }
         // 触发 close watch / closed_tx（幂等；先移除再 close 以避免重复事件）。
         session.close(reason);
-        // join 读/写线程并释放串口（已启动 I/O 时；否则走下方 take_transport）。
-        session.shutdown_io();
+        // join 读/写线程并释放串口放到 spawn_blocking，避免阻塞 tokio worker。
+        let session_arc = Arc::clone(&session);
+        tokio::task::spawn_blocking(move || {
+            session_arc.shutdown_io();
+            drop(session_arc.take_transport());
+        });
         // 发送 `session.state(closed)`。
         self.emit(
             &session,
@@ -450,14 +454,13 @@ impl ManagerShared {
             Some(reason),
             reason.close_code(),
         );
-        // 关闭数据监听器、取消定时器、释放串口传输。
+        // 关闭数据监听器、取消定时器。
         if let Some(handle) = handle {
             handle.deadline.cancel();
             if let Some(shutdown) = handle.shutdown {
                 shutdown();
             }
         }
-        drop(session.take_transport());
     }
 
     /// 向事件广播发送 `session.state`；无订阅者时静默丢弃。
