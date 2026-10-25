@@ -4,19 +4,21 @@
 //! 与管理器由任务 6/8 实现。`close()` 只改状态并通过 close watch / `closed_tx`
 //! 通知，不直接发送 `session.state` 管理事件（由管理器负责）。
 
-use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tokio::sync::{broadcast, mpsc, watch};
 
 use crate::config::SessionConfig;
 use crate::protocol::{
-    Counters, DebugFrame, ErrorBody, Event, GapInfo, SessionInfo, SessionParams, SessionState,
+    Counters, DebugFrame, DebugFrameData, ErrorBody, Event, GapInfo, SessionInfo, SessionParams,
+    SessionState,
 };
 use crate::serial::{SerialParams, SerialTransport};
 
 use super::debug_ring::DebugRing;
+use super::io::IoHandle;
 
 /// 调试环形缓冲的数据字节上限（64 KiB）。
 const DEBUG_RING_BYTES: usize = 64 * 1024;
@@ -116,21 +118,25 @@ pub struct Session {
     cfg: SessionConfig,
     created_at: u64,
     data_port: AtomicU16,
-    /// 任务 7 的读/写线程向 `events` 发 `debug.frame`；本任务尚未接线。
-    #[allow(dead_code)]
+    /// 读/写线程通过 [`Self::push_debug`] 向 `events` 发 `debug.frame`。
     events: broadcast::Sender<Event>,
     closed_tx: mpsc::UnboundedSender<String>,
     close_tx: watch::Sender<Option<CloseReason>>,
     close_rx: watch::Receiver<Option<CloseReason>>,
     inner: Mutex<SessionInner>,
     debug_ring: Mutex<DebugRing>,
-    debug_seq: AtomicU64,
     /// 串口 → 网页的数据块接收端（数据 WS 在 attach 时取走、宽限时归还）。
     rx: Mutex<Option<mpsc::Receiver<Vec<u8>>>>,
-    /// 网页 → 串口的数据块发送端（数据 WS 每次 attach 克隆一份）。
-    tx: mpsc::Sender<Vec<u8>>,
+    /// 串口 → 网页的数据块发送端（读线程启动时取走）。
+    rx_tx: Mutex<Option<mpsc::Sender<Vec<u8>>>>,
+    /// 网页 → 串口的数据块发送端（数据 WS 每次 attach 克隆一份；关闭时 drop 以唤醒写线程）。
+    tx: Mutex<Option<mpsc::Sender<Vec<u8>>>>,
+    /// 网页 → 串口的数据块接收端（写线程启动时取走）。
+    tx_rx: Mutex<Option<mpsc::Receiver<Vec<u8>>>>,
     /// 串口传输对象；任务 7 的读/写线程从这里取走并接线。
     transport: Mutex<Option<Box<dyn SerialTransport>>>,
+    /// 运行中的读/写线程句柄；关闭时 join 并释放串口。
+    io: Mutex<Option<IoHandle>>,
 }
 
 impl Session {
@@ -158,10 +164,10 @@ impl Session {
         let created_at = now_ms();
         let connect_by = created_at + cfg.connect_timeout_ms;
         let rx_capacity = (cfg.rx_queue_bytes / 4096).max(1);
-        // rx/tx 的串口侧端点（发送端/接收端）由任务 7 的读写线程持有；
-        // 本任务只定义数据 WS 一侧的通道接口。
-        let (_rx_tx, rx) = mpsc::channel::<Vec<u8>>(rx_capacity);
-        let (tx, _tx_rx) = mpsc::channel::<Vec<u8>>(1);
+        // rx/tx 的串口侧端点（发送端/接收端）由任务 7 的读/写线程持有；
+        // 数据 WS 一侧拿到的是 rx（接收端）与 tx（发送端）。
+        let (rx_tx, rx) = mpsc::channel::<Vec<u8>>(rx_capacity);
+        let (tx, tx_rx) = mpsc::channel::<Vec<u8>>(1);
         let (close_tx, close_rx) = watch::channel(None);
         Self {
             id,
@@ -188,10 +194,12 @@ impl Session {
                 last_tx_at: None,
             }),
             debug_ring: Mutex::new(DebugRing::new(DEBUG_RING_BYTES)),
-            debug_seq: AtomicU64::new(1),
             rx: Mutex::new(Some(rx)),
-            tx,
+            rx_tx: Mutex::new(Some(rx_tx)),
+            tx: Mutex::new(Some(tx)),
+            tx_rx: Mutex::new(Some(tx_rx)),
             transport: Mutex::new(transport),
+            io: Mutex::new(None),
         }
     }
 
@@ -291,25 +299,78 @@ impl Session {
         self.transport.lock().unwrap().is_some()
     }
 
+    /// 读线程的单次读超时（毫秒）。
+    pub(crate) fn read_timeout_ms(&self) -> u64 {
+        self.cfg.read_timeout_ms
+    }
+
+    /// 写线程的单块写超时（毫秒）。
+    pub(crate) fn write_timeout_ms(&self) -> u64 {
+        self.cfg.write_timeout_ms
+    }
+
+    /// 串口波特率；写线程据此计算分块大小。
+    pub(crate) fn baud_rate(&self) -> u32 {
+        self.params.baud_rate
+    }
+
+    /// 首次 attach 时建立读/写线程（幂等；无串口传输时静默跳过）。
+    pub(crate) fn start_io(self: &Arc<Self>) {
+        if self.io.lock().unwrap().is_some() {
+            return;
+        }
+        let Some(transport) = self.take_transport() else {
+            return;
+        };
+        let Some(rx_tx) = self.rx_tx.lock().unwrap().take() else {
+            return;
+        };
+        let Some(tx_rx) = self.tx_rx.lock().unwrap().take() else {
+            return;
+        };
+        let io = IoHandle::spawn(Arc::clone(self), transport, rx_tx, tx_rx);
+        *self.io.lock().unwrap() = Some(io);
+    }
+
+    /// 关闭时由 manager 调用：join 读/写线程并释放串口（幂等）。
+    pub(crate) fn shutdown_io(&self) {
+        if let Some(io) = self.io.lock().unwrap().take() {
+            io.shutdown();
+        }
+    }
+
     /// 数据 WS 附加：`awaiting`/`grace` → `active`，返回收发通道。
-    pub fn attach(&self) -> Result<AttachedData, SessionError> {
-        {
+    ///
+    /// 首次从 `awaiting` 进入 `active` 时启动读/写线程。
+    pub fn attach(self: &Arc<Self>) -> Result<AttachedData, SessionError> {
+        let first_active = {
             let mut inner = self.inner.lock().unwrap();
             match inner.state {
                 SessionState::Awaiting => {
                     inner.state = SessionState::Active;
                     inner.active_since = Some(now_ms());
+                    true
                 }
-                SessionState::Grace => resume_locked(&mut inner),
+                SessionState::Grace => {
+                    resume_locked(&mut inner);
+                    false
+                }
                 SessionState::Active => return Err(SessionError::AlreadyActive),
                 SessionState::Closed => return Err(SessionError::Closed),
             }
+        };
+        if first_active {
+            self.start_io();
         }
         let rx = self.take_rx().unwrap_or_else(closed_rx);
-        Ok(AttachedData {
-            rx,
-            tx: self.tx.clone(),
-        })
+        let tx = self
+            .tx
+            .lock()
+            .unwrap()
+            .as_ref()
+            .cloned()
+            .ok_or(SessionError::Closed)?;
+        Ok(AttachedData { rx, tx })
     }
 
     /// 进入宽限期：`active` → `grace`，记录宽限起止信息。
@@ -357,6 +418,8 @@ impl Session {
         }
         let _ = self.close_tx.send(Some(reason));
         let _ = self.closed_tx.send(self.id.clone());
+        // 唤醒写线程：drop tx 发送端，channel 关闭后 `blocking_recv` 返回 None。
+        drop(self.tx.lock().unwrap().take());
     }
 
     /// 订阅关闭通知（数据 WS 据此发送 close code 并退出）。
@@ -369,14 +432,19 @@ impl Session {
         *self.close_rx.borrow()
     }
 
-    /// 分配下一个调试帧序号（从 1 递增）。
-    pub fn next_debug_seq(&self) -> u64 {
-        self.debug_seq.fetch_add(1, Ordering::Relaxed)
-    }
-
-    /// 追加一条调试帧到环形缓冲。
-    pub fn push_debug_frame(&self, frame: DebugFrame) {
-        self.debug_ring.lock().unwrap().push(frame);
+    /// 取号并追加一条调试帧（同锁原子），并向 `events` 发 `debug.frame`。
+    ///
+    /// 读/写线程并发调用，帧 `seq` 与插入顺序保持一致。
+    pub fn push_debug(&self, direction: &str, data: Vec<u8>) {
+        let frame = self
+            .debug_ring
+            .lock()
+            .unwrap()
+            .push_frame(direction, now_ms(), data);
+        let _ = self.events.send(Event::DebugFrame(DebugFrameData {
+            session_id: self.id.clone(),
+            frame,
+        }));
     }
 
     /// 回放当前调试环形缓冲（按插入顺序）。

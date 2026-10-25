@@ -3,6 +3,7 @@
 pub mod counters;
 pub mod data_listener;
 pub mod debug_ring;
+mod io;
 pub mod manager;
 #[allow(clippy::module_inception)] // 计划指定文件名为 session/session.rs
 pub mod session;

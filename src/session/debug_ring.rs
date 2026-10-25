@@ -14,6 +14,8 @@ pub struct DebugRing {
     /// 当前保留帧的数据字节总数。
     bytes: usize,
     frames: VecDeque<DebugFrame>,
+    /// 下一个分配的调试帧序号（从 1 递增）；与 `frames` 同锁分配，保证并发下有序。
+    next_seq: u64,
 }
 
 impl DebugRing {
@@ -23,6 +25,7 @@ impl DebugRing {
             byte_limit,
             bytes: 0,
             frames: VecDeque::new(),
+            next_seq: 1,
         }
     }
 
@@ -35,6 +38,17 @@ impl DebugRing {
                 self.bytes -= old.size;
             }
         }
+    }
+
+    /// 取号并追加一帧（同锁原子）：分配 `next_seq`、构造并 push，返回该帧。
+    ///
+    /// 读/写线程并发调用时，帧的 `seq` 与插入顺序保持一致，避免「先取号后 push」
+    /// 造成的乱序。
+    pub fn push_frame(&mut self, direction: &str, ts_ms: u64, data: Vec<u8>) -> DebugFrame {
+        let frame = DebugFrame::new(direction, self.next_seq, ts_ms, data);
+        self.next_seq += 1;
+        self.push(frame.clone());
+        frame
     }
 
     /// 按插入顺序返回当前保留的全部帧。

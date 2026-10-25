@@ -163,6 +163,9 @@ struct FactoryState {
     opens: Vec<SerialParams>,
     /// 若为 `Some`，下一次 `open` 会先发出 started 信号再阻塞，直到被 `release`。
     open_gate: Option<OpenGate>,
+    /// 若为 `Some`，每次 `open` 都返回该传输的克隆（共享同一状态），便于测试在
+    /// `open` 前注入数据/错误。
+    shared_transport: Option<FakeTransport>,
 }
 
 /// 阻塞下一次 `open` 的闸门：open 进入后发 started，随后阻塞等 release。
@@ -200,6 +203,17 @@ impl OpenGateHandle {
 impl FakeTransportFactory {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// 构造一个「共享传输」工厂：每次 `open` 返回同一 `FakeTransport` 的克隆，
+    /// 测试可先持有该传输注入读数据/写错误。
+    pub fn with_transport(transport: FakeTransport) -> Self {
+        Self {
+            state: Mutex::new(FactoryState {
+                shared_transport: Some(transport),
+                ..Default::default()
+            }),
+        }
     }
 
     /// 下一次 `open` 返回指定错误（如 NotFound/PermissionDenied/Busy）。
@@ -261,10 +275,18 @@ impl TransportFactory for FakeTransportFactory {
             let _ = gate.started.try_send(());
             let _ = gate.release.recv();
         }
-        let transport = FakeTransport::new();
-        let mut state = self.state.lock().unwrap();
-        state.transports.push(Arc::new(transport.clone()));
-        state.opens.push(params.clone());
+        let transport = {
+            let mut state = self.state.lock().unwrap();
+            state.opens.push(params.clone());
+            match state.shared_transport.clone() {
+                Some(shared) => shared,
+                None => {
+                    let t = FakeTransport::new();
+                    state.transports.push(Arc::new(t.clone()));
+                    t
+                }
+            }
+        };
         Ok(Box::new(transport))
     }
 }
@@ -347,4 +369,63 @@ pub fn token_of(result: &OpenResult) -> String {
         .next()
         .expect("data_url 缺少 token")
         .to_string()
+}
+
+/// 生成一组可用的 `SerialParams`（直接构造 `Session` 的用例用）。
+pub fn sample_params(path: &str) -> SerialParams {
+    SerialParams {
+        path: path.to_string(),
+        baud_rate: 115_200,
+        data_bits: 8,
+        parity: Parity::None,
+        stop_bits: 1,
+        flow_control: FlowControl::None,
+        dtr: None,
+        rts: None,
+    }
+}
+
+/// 关闭会话的观测结果：数据面 WebSocket close code。
+#[derive(Debug, Clone, Copy)]
+pub struct ClosedReason {
+    pub code: u16,
+}
+
+/// 构造一个带共享假串口的 `SessionManager`；返回的 `FakeTransport` 与后续
+/// `open` 生成的会话串口共享同一状态，可在 `open` 后注入读数据/写错误。
+pub fn test_manager_with_fake_serial() -> (SessionManager, FakeTransport) {
+    test_manager_with_rx_queue(SessionConfig::default().rx_queue_bytes)
+}
+
+/// 构造 `rx_queue_bytes = 4096`（rx 通道容量 1）的测试管理器，用于背压用例。
+pub fn test_manager_with_small_rx_queue() -> (SessionManager, FakeTransport) {
+    test_manager_with_rx_queue(4096)
+}
+
+fn test_manager_with_rx_queue(rx_queue_bytes: usize) -> (SessionManager, FakeTransport) {
+    let fake = FakeTransport::new();
+    let factory = Arc::new(FakeTransportFactory::with_transport(fake.clone()));
+    let cfg = SessionConfig {
+        rx_queue_bytes,
+        ..SessionConfig::default()
+    };
+    let (events, _) = broadcast::channel(16);
+    let mgr = SessionManager::new(factory, Arc::new(FakeDataListener::new()), cfg, events);
+    (mgr, fake)
+}
+
+/// 等待 `session_id` 从 `list` 中消失，返回其数据面 close code（超时 panic）。
+pub async fn wait_closed(mgr: &SessionManager, session_id: &str) -> ClosedReason {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if mgr.list().await.is_empty() {
+            let code = mgr
+                .closed_reason(session_id)
+                .and_then(|reason| reason.close_code())
+                .expect("关闭原因未记录");
+            return ClosedReason { code };
+        }
+        assert!(tokio::time::Instant::now() < deadline, "wait_closed 超时");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
 }

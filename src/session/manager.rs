@@ -124,6 +124,8 @@ struct ManagerShared {
     /// 正在打开的 path 占位集：并发 open 与 max_sessions 计数都把它算在内，
     /// 避免「检查 → spawn_blocking 让出 → 插入」之间出现竞态。
     opening: Mutex<HashSet<String>>,
+    /// 已关闭会话的关闭原因（保留供观测/测试查询，键为 session id）。
+    closed_reasons: Mutex<HashMap<String, CloseReason>>,
 }
 
 struct ManagerInner {
@@ -153,6 +155,7 @@ impl SessionManager {
             sessions: Mutex::new(HashMap::new()),
             handles: Mutex::new(HashMap::new()),
             opening: Mutex::new(HashSet::new()),
+            closed_reasons: Mutex::new(HashMap::new()),
         });
         let (closed_tx, mut closed_rx) = mpsc::unbounded_channel();
         let inner = Arc::new(ManagerInner { shared, closed_tx });
@@ -318,6 +321,17 @@ impl SessionManager {
         infos
     }
 
+    /// 查询已关闭会话的关闭原因（供观测/测试使用）。
+    pub fn closed_reason(&self, session_id: &str) -> Option<CloseReason> {
+        self.inner
+            .shared
+            .closed_reasons
+            .lock()
+            .unwrap()
+            .get(session_id)
+            .copied()
+    }
+
     /// 校验 token 并把会话切到 active，返回数据 WS 收发通道。
     pub async fn attach(&self, session_id: &str, token: &str) -> Result<AttachedData, AttachError> {
         let shared = Arc::clone(&self.inner.shared);
@@ -406,6 +420,11 @@ impl ManagerShared {
 
     /// 关闭会话并清理资源；已不存在时静默返回（幂等）。
     fn close_inner(&self, session_id: &str, reason: CloseReason) {
+        // 先记录关闭原因（在移除会话之前），供观测/测试查询。
+        self.closed_reasons
+            .lock()
+            .unwrap()
+            .insert(session_id.to_string(), reason);
         let (session, handle) = {
             let mut sessions = self.sessions.lock().unwrap();
             let mut handles = self.handles.lock().unwrap();
@@ -422,6 +441,8 @@ impl ManagerShared {
         }
         // 触发 close watch / closed_tx（幂等；先移除再 close 以避免重复事件）。
         session.close(reason);
+        // join 读/写线程并释放串口（已启动 I/O 时；否则走下方 take_transport）。
+        session.shutdown_io();
         // 发送 `session.state(closed)`。
         self.emit(
             &session,
