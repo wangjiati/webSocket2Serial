@@ -1,0 +1,2059 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230ea5e9'/%3E%3Ctext x='16' y='22' font-size='17' font-family='monospace' text-anchor='middle' fill='white'%3EW%3C/text%3E%3C/svg%3E" />
+<title>WebSocket2Serial 全功能演示</title>
+<style>
+:root{
+  --bg:#0a0f16; --panel:#111a24; --panel-2:#0d151e; --line:#223041;
+  --text:#e6edf5; --muted:#8ea0b5; --dim:#61748a;
+  --accent:#38bdf8; --accent-2:#7dd3fc; --green:#22c55e; --amber:#f59e0b; --red:#ef4444; --violet:#a78bfa;
+  --mono:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono","Courier New",monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Microsoft YaHei","PingFang SC",sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:radial-gradient(1000px 500px at 20% -10%,#102438 0%,var(--bg) 55%);color:var(--text);font-family:var(--sans);font-size:14px;line-height:1.5}
+body{min-height:100vh}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+code,pre,.mono{font-family:var(--mono)}
+code{background:rgba(56,189,248,.1);border:1px solid rgba(56,189,248,.18);border-radius:4px;padding:0 4px;font-size:12px;overflow-wrap:anywhere}
+.hidden{display:none!important}
+.topbar{display:flex;align-items:center;gap:22px;flex-wrap:wrap;padding:14px 22px;border-bottom:1px solid var(--line);background:rgba(10,15,22,.86);position:sticky;top:0;z-index:20;backdrop-filter:blur(10px)}
+.brand{display:flex;align-items:center;gap:12px;min-width:260px}
+.logo{width:38px;height:38px;border-radius:10px;display:grid;place-items:center;background:linear-gradient(135deg,#0ea5e9,#2563eb);font-weight:800;letter-spacing:-1px;box-shadow:0 8px 24px rgba(14,165,233,.25)}
+.brand h1{margin:0;font-size:16px;letter-spacing:.2px}
+.brand .sub{color:var(--muted);font-size:12px;margin-top:1px}
+.top-status{display:flex;gap:8px;flex-wrap:wrap;flex:1}
+.pill{border:1px solid var(--line);background:var(--panel-2);color:var(--muted);border-radius:999px;padding:5px 10px;font-size:12px;white-space:nowrap}
+.pill b{color:var(--text);font-weight:600}
+.pill.ok{border-color:rgba(34,197,94,.45);color:#9ae6b4}
+.pill.warn{border-color:rgba(245,158,11,.5);color:#fcd34d}
+.pill.err{border-color:rgba(239,68,68,.55);color:#fca5a5}
+.top-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.top-actions label{color:var(--muted);font-size:12px;display:flex;align-items:center;gap:6px}
+.banner{margin:12px 22px 0;padding:12px 16px;border-radius:10px;border:1px solid rgba(245,158,11,.45);background:rgba(245,158,11,.08);color:#fcd34d;font-size:13px}
+.banner code{color:#fff}
+.tabs{display:flex;gap:4px;padding:12px 22px 0;flex-wrap:wrap;border-bottom:1px solid var(--line);background:rgba(10,15,22,.4)}
+.tabs button{border:1px solid transparent;background:transparent;color:var(--muted);border-radius:9px 9px 0 0;padding:9px 14px;font-size:13px}
+.tabs button:hover{color:var(--text);background:rgba(255,255,255,.03)}
+.tabs button.active{color:var(--accent-2);background:var(--panel);border-color:var(--line);border-bottom-color:var(--panel)}
+main{padding:18px 22px 60px;max-width:1700px;margin:0 auto}
+.tab-panel{display:none}
+.tab-panel.active{display:block}
+.grid{display:grid;gap:14px;align-items:start}
+.grid.cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.grid.cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.card{border:1px solid var(--line);border-radius:12px;background:linear-gradient(180deg,rgba(19,28,40,.96),rgba(13,21,30,.96));box-shadow:0 12px 30px rgba(0,0,0,.18);padding:14px 16px;min-width:0}
+.card h2,.card h3{margin:0 0 10px;font-size:14px;letter-spacing:.2px}
+.card h2{display:flex;align-items:center;gap:8px}
+.card .hint{color:var(--muted);font-size:12px;margin:4px 0 0}
+.card .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.kv{display:grid;grid-template-columns:150px 1fr;gap:4px 10px;font-size:13px}
+.kv .k{color:var(--muted)}
+.kv .v{min-width:0;overflow-wrap:anywhere}
+.mono-ellipsis{font-family:var(--mono);font-size:12px;overflow-wrap:anywhere}
+.btn{border:1px solid #2b4a66;background:linear-gradient(180deg,#17324b,#102536);color:#dff4ff;border-radius:8px;padding:7px 11px;font-size:12.5px;transition:.15s}
+.btn:hover{filter:brightness(1.12)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn.primary{border-color:#0ea5e9;background:linear-gradient(180deg,#0284c7,#075985);color:white}
+.btn.good{border-color:#15803d;background:linear-gradient(180deg,#166534,#14532d);color:#dcfce7}
+.btn.warn{border-color:#b45309;background:linear-gradient(180deg,#92400e,#78350f);color:#fef3c7}
+.btn.danger{border-color:#b91c1c;background:linear-gradient(180deg,#991b1b,#7f1d1d);color:#fee2e2}
+.btn.ghost{background:transparent;border-color:var(--line);color:var(--muted)}
+.btn.ghost:hover{color:var(--text);border-color:#3a5168}
+.btn.small{padding:4px 8px;font-size:11.5px;border-radius:6px}
+input[type=text],input[type=number],select,textarea{border:1px solid var(--line);background:#0a121b;color:var(--text);border-radius:7px;padding:7px 9px;outline:none;min-width:0}
+input[type=text]:focus,input[type=number]:focus,select:focus,textarea:focus{border-color:#0ea5e9;box-shadow:0 0 0 2px rgba(14,165,233,.15)}
+input[type=checkbox]{accent-color:var(--accent)}
+label.check{display:inline-flex;align-items:center;gap:5px;color:var(--muted);font-size:12px}
+label.check input{transform:translateY(1px)}
+.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:9px}
+table{width:100%;border-collapse:collapse;font-size:12.5px;min-width:640px}
+th,td{padding:7px 9px;border-bottom:1px solid rgba(34,48,65,.7);text-align:left;vertical-align:top}
+th{color:var(--muted);font-weight:600;background:rgba(255,255,255,.02);position:sticky;top:0}
+tr:last-child td{border-bottom:0}
+td.mono,th.mono{font-family:var(--mono);font-size:11.5px}
+.badge{display:inline-flex;align-items:center;border-radius:999px;border:1px solid var(--line);padding:2px 8px;font-size:11px;color:var(--muted);white-space:nowrap}
+.badge.awaiting{border-color:rgba(245,158,11,.5);color:#fcd34d}
+.badge.active{border-color:rgba(34,197,94,.5);color:#86efac}
+.badge.grace{border-color:rgba(167,139,250,.55);color:#ddd6fe}
+.badge.closed,.badge.error{border-color:rgba(239,68,68,.5);color:#fca5a5}
+.badge.slot-a{background:rgba(56,189,248,.12);border-color:rgba(56,189,248,.4);color:#bae6fd}
+.badge.slot-b{background:rgba(167,139,250,.12);border-color:rgba(167,139,250,.4);color:#ddd6fe}
+.form-grid{display:grid;grid-template-columns:repeat(6,minmax(120px,1fr));gap:8px 10px;align-items:end}
+.field{display:flex;flex-direction:column;gap:4px;min-width:0}
+.field label{color:var(--muted);font-size:11.5px}
+.field.wide{grid-column:span 2}
+.field.full{grid-column:1/-1}
+.terminal-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.term-pane{border:1px solid var(--line);border-radius:12px;background:var(--panel-2);display:flex;flex-direction:column;min-height:470px;overflow:hidden}
+.term-head{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--line);background:rgba(255,255,255,.02);flex-wrap:wrap}
+.term-head .slotname{font-weight:800;color:var(--accent-2);font-size:13px}
+.term-head .port{font-family:var(--mono);font-size:12px;color:var(--text)}
+.term-head .spacer{flex:1}
+.term-meta{display:flex;gap:10px;flex-wrap:wrap;padding:7px 12px;border-bottom:1px solid rgba(34,48,65,.55);color:var(--muted);font-size:11.5px;font-family:var(--mono)}
+.term-meta .danger{color:#fca5a5}
+.term-tools{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:7px 10px;border-bottom:1px solid rgba(34,48,65,.55);background:rgba(0,0,0,.08)}
+.term-log{flex:1;min-height:240px;max-height:360px;overflow:auto;padding:8px 10px;background:#070c12;font-family:var(--mono);font-size:11.5px;line-height:1.5}
+.log-line{display:grid;grid-template-columns:76px 28px 1fr;gap:6px;white-space:pre-wrap;overflow-wrap:anywhere;padding:1px 2px;border-radius:4px}
+.log-line:hover{background:rgba(56,189,248,.06)}
+.log-line .ts{color:var(--dim)}
+.log-line .dir{font-weight:700}
+.log-line .dir.rx{color:#86efac}
+.log-line .dir.tx{color:#7dd3fc}
+.log-line .body{color:#cbd5e1}
+.term-send{display:flex;gap:6px;padding:8px 10px;border-top:1px solid var(--line);background:rgba(0,0,0,.12)}
+.term-send input{flex:1}
+.empty{color:var(--dim);padding:18px;text-align:center;font-size:12px}
+.events{height:300px;overflow:auto;background:#070c12;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-family:var(--mono);font-size:11.5px;line-height:1.55}
+.event-line{white-space:pre-wrap;overflow-wrap:anywhere;padding:1px 0}
+.event-line .ev-ts{color:var(--dim);margin-right:8px}
+.event-line .ev-kind{display:inline-block;min-width:64px;color:var(--accent-2)}
+.event-line .ev-kind.err{color:#fca5a5}
+.event-line .ev-kind.ok{color:#86efac}
+.runner-steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.runner-steps li{display:grid;grid-template-columns:24px 170px 1fr;gap:8px;align-items:start;border:1px solid var(--line);border-radius:8px;padding:7px 9px;background:rgba(0,0,0,.12);font-size:12px}
+.runner-steps .st{font-weight:700;text-align:center}
+.runner-steps .st.pending{color:var(--dim)}
+.runner-steps .st.running{color:#fcd34d}
+.runner-steps .st.pass{color:#86efac}
+.runner-steps .st.fail{color:#fca5a5}
+.runner-steps .st.skip{color:#94a3b8}
+.runner-steps .detail{color:var(--muted);overflow-wrap:anywhere}
+.debug-table{max-height:340px;overflow:auto}
+#edge-log{height:220px}
+#debug-body td{font-family:var(--mono);font-size:11.5px}
+#debug-body td.hexcell{max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.split{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.muted{color:var(--muted)}
+.small{font-size:12px}
+.tiny{font-size:11.5px}
+.green{color:#86efac}.amber{color:#fcd34d}.red{color:#fca5a5}.cyan{color:#7dd3fc}.violet{color:#ddd6fe}
+hr.sep{border:0;border-top:1px solid var(--line);margin:12px 0}
+@media(max-width:1050px){.terminal-grid,.grid.cols-2,.grid.cols-3{grid-template-columns:1fr}.form-grid{grid-template-columns:repeat(3,minmax(120px,1fr))}.brand{min-width:0}}
+@media(max-width:650px){.topbar{padding:12px}.tabs,main{padding-left:12px;padding-right:12px}.form-grid{grid-template-columns:repeat(2,minmax(120px,1fr))}.kv{grid-template-columns:110px 1fr}.runner-steps li{grid-template-columns:22px 1fr}.runner-steps li .detail{grid-column:1/-1}.term-log{max-height:280px}}
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div class="logo">WS</div>
+    <div>
+      <h1>WebSocket2Serial 全功能演示</h1>
+      <div class="sub">浏览器 ↔ 本机串口透传 · 所有协议动作与事件</div>
+    </div>
+  </div>
+  <div class="top-status">
+    <span class="pill" id="pill-mgmt">管理 WS：未连接</span>
+    <span class="pill" id="pill-version">版本：-</span>
+    <span class="pill" id="pill-admin">管理页：-</span>
+    <span class="pill" id="pill-autostart">自启：-</span>
+  </div>
+  <div class="top-actions">
+    <label>管理端口 <input id="mgmt-port" type="number" value="8765" min="1" max="65535" style="width:84px" /></label>
+    <button class="btn primary" id="btn-connect">连接</button>
+    <button class="btn ghost" id="btn-reconnect">重连管理 WS</button>
+  </div>
+</header>
+
+<div id="banner" class="banner hidden"></div>
+
+<nav class="tabs">
+  <button data-tab="overview" class="active">概览 / 一键演示</button>
+  <button data-tab="ports">端口</button>
+  <button data-tab="sessions">会话</button>
+  <button data-tab="terminal">双端口终端</button>
+  <button data-tab="debug">调试</button>
+  <button data-tab="edge">边界自检</button>
+  <button data-tab="events">事件日志</button>
+</nav>
+
+<main>
+  <!-- 概览 -->
+  <section id="tab-overview" class="tab-panel active">
+    <div class="grid cols-2" style="margin-bottom:14px">
+      <div class="card">
+        <h2>连接信息</h2>
+        <div class="kv" id="hello-info">
+          <div class="k">页面 Origin</div><div class="v mono-ellipsis" id="page-origin">-</div>
+          <div class="k">管理 WebSocket</div><div class="v mono-ellipsis" id="mgmt-url">-</div>
+          <div class="k">协议</div><div class="v" id="hello-protocol">-</div>
+          <div class="k">工具版本</div><div class="v" id="hello-version">-</div>
+          <div class="k">操作系统</div><div class="v" id="hello-os">-</div>
+          <div class="k">管理页</div><div class="v" id="hello-admin">-</div>
+          <div class="k">开机自启</div><div class="v" id="hello-autostart">-（只读，托盘菜单修改）</div>
+          <div class="k">当前会话</div><div class="v" id="hello-sessions">-</div>
+        </div>
+        <div class="row" style="margin-top:12px">
+          <a class="btn ghost" id="link-admin" href="#" target="_blank" rel="noreferrer">打开管理页</a>
+          <button class="btn ghost" id="btn-refresh-all">刷新端口/会话</button>
+          <button class="btn warn" id="btn-admin-toggle">切换管理页</button>
+        </div>
+        <p class="hint">管理页关闭后只影响 8766 的 HTTP 页面，不影响本演示页和管理 WS；随时可以在这里恢复。</p>
+      </div>
+
+      <div class="card">
+        <h2>一键完整演示</h2>
+        <p class="hint">自动选择两个不同串口（也可先在“会话”页指定），依次演示端口、双端口回环、调试、错误码、宽限重连和管理页开关。不硬编码任何 COM。</p>
+        <div class="row" style="margin:10px 0">
+          <button class="btn primary" id="btn-run-demo">开始完整演示</button>
+          <span class="badge" id="runner-status">未运行</span>
+          <span class="badge" id="runner-count">0 / 0</span>
+        </div>
+        <ol class="runner-steps" id="runner-steps"></ol>
+      </div>
+    </div>
+
+    <div class="grid cols-3">
+      <div class="card">
+        <h3>快速开始</h3>
+        <div class="small muted" style="display:flex;flex-direction:column;gap:5px">
+          <div>1. 启动桥接：<code>cargo run</code> 或已安装的 <code>websocket2serial.exe</code></div>
+          <div>2. 本地 HTTP 打开本页：<code>python -m http.server 8080 --bind 127.0.0.1</code> → <code>http://127.0.0.1:8080/demo/websocket2serial-demo.html</code></div>
+          <div>3. 在“端口”页确认串口；在“会话”页选择参数并打开 A/B</div>
+          <div>4. 若 A/B 是互连的一对串口，点击“开始完整演示”</div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>本页覆盖</h3>
+        <div class="small muted" style="display:flex;flex-direction:column;gap:4px">
+          <div>管理动作：ports.list / session.open / session.close / session.list / session.write / debug.subscribe / admin.set</div>
+          <div>事件：hello / ports.changed / session.state / debug.frame / admin.state</div>
+          <div>数据面：二进制、文本/HEX、close code、grace、lastGap</div>
+          <div>边界：4002 / PORT_BUSY / PORT_NOT_FOUND / SESSION_STATE / UNKNOWN_ACTION / 1003 / 1009</div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>注意</h3>
+        <div class="small muted" style="display:flex;flex-direction:column;gap:4px">
+          <div>托盘/开机自启只能读取状态，不能从网页控制。</div>
+          <div>浏览器不暴露握手 HTTP 404，错误 token 会显示为握手失败/close 1006。</div>
+          <div>浏览器不能发送 close 1001；异常断开用 3001 模拟，服务端统一进入 grace。</div>
+          <div>请用 <code>127.0.0.1</code> 或 <code>localhost</code> 打开；不要用 <code>file://</code>。</div>
+          <div>虚拟串口对在大块全双工下可能丢字节；一键演示使用 4KB 小块。</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 端口 -->
+  <section id="tab-ports" class="tab-panel">
+    <div class="card" style="margin-bottom:14px">
+      <h2>串口列表 <span class="badge" id="ports-count">0</span></h2>
+      <div class="row">
+        <button class="btn primary" id="btn-refresh-ports">重新扫描</button>
+        <span class="muted small">热插拔由管理 WS 的 ports.changed 事件实时推送；也可以手动刷新。</span>
+      </div>
+      <datalist id="port-list"></datalist>
+      <div class="table-wrap" style="margin-top:10px">
+        <table>
+          <thead><tr><th>Path</th><th>类型</th><th>厂商</th><th>产品</th><th>序列号</th><th>VID/PID</th><th>操作</th></tr></thead>
+          <tbody id="ports-body"></tbody>
+        </table>
+      </div>
+      <div class="empty" id="ports-empty">暂无串口</div>
+    </div>
+  </section>
+
+  <!-- 会话 -->
+  <section id="tab-sessions" class="tab-panel">
+    <div class="card" style="margin-bottom:14px">
+      <h2>打开串口</h2>
+      <div class="form-grid">
+        <div class="field wide"><label for="path-A">A 串口</label><input id="path-A" type="text" list="port-list" placeholder="选择或输入 A 串口" /></div>
+        <div class="field wide"><label for="path-B">B 串口</label><input id="path-B" type="text" list="port-list" placeholder="选择或输入 B 串口" /></div>
+        <div class="field"><label for="baud">波特率</label><input id="baud" type="number" value="115200" min="1" /></div>
+        <div class="field"><label for="databits">数据位</label><select id="databits"><option>8</option><option>7</option><option>6</option><option>5</option></select></div>
+        <div class="field"><label for="parity">校验</label><select id="parity"><option value="none">none</option><option value="odd">odd</option><option value="even">even</option></select></div>
+        <div class="field"><label for="stopbits">停止位</label><select id="stopbits"><option>1</option><option>2</option></select></div>
+        <div class="field"><label for="flowcontrol">流控</label><select id="flowcontrol"><option value="none">none</option><option value="software">software</option><option value="hardware">hardware</option></select></div>
+        <div class="field"><label for="dtr">DTR 初值</label><select id="dtr"><option value="default">默认</option><option value="true">高</option><option value="false">低</option></select></div>
+        <div class="field"><label for="rts">RTS 初值</label><select id="rts"><option value="default">默认</option><option value="true">高</option><option value="false">低</option></select></div>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn primary" id="btn-open-a">打开 A</button>
+        <button class="btn primary" id="btn-open-b">打开 B</button>
+        <button class="btn ghost" id="btn-close-a">关闭 A</button>
+        <button class="btn ghost" id="btn-close-b">关闭 B</button>
+        <span class="muted small" id="open-result"></span>
+      </div>
+      <p class="hint">A/B 可以不同参数？当前表单共用参数，只有串口路径分开。若要测不同波特率，先关闭一个再改参数打开另一个。</p>
+    </div>
+
+    <div class="card">
+      <h2>当前会话 <span class="badge" id="sessions-count">0</span></h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>槽</th><th>串口</th><th>状态</th><th>参数</th><th>RX / TX / DROP</th><th>Last Gap</th><th>最近错误</th><th>操作</th></tr></thead>
+          <tbody id="sessions-body"></tbody>
+        </table>
+      </div>
+      <div class="empty" id="sessions-empty">暂无会话</div>
+    </div>
+  </section>
+
+  <!-- 终端 -->
+  <section id="tab-terminal" class="tab-panel">
+    <div class="card" style="margin-bottom:14px">
+      <h2>双端口终端</h2>
+      <div class="row">
+        <button class="btn good" id="btn-loop-ab">A → B 回环 4KB</button>
+        <button class="btn good" id="btn-loop-ba">B → A 回环 4KB</button>
+        <span class="muted small" id="loop-result">要求 A/B 是互连的一对串口</span>
+        <label class="check"><input type="checkbox" id="auto-reconnect" /> 异常断线后自动重连</label>
+      </div>
+    </div>
+    <div class="terminal-grid">
+      <div class="term-pane" data-slot="A">
+        <div class="term-head">
+          <span class="badge slot-a">A</span><span class="port" id="term-port-A">未打开</span>
+          <span class="badge" id="term-state-A">-</span><span class="spacer"></span>
+          <span class="mono-ellipsis muted tiny" id="term-sid-A"></span>
+        </div>
+        <div class="term-meta">
+          <span id="term-counters-A">RX 0 / TX 0 / DROP 0</span>
+          <span id="term-close-A"></span>
+          <span id="term-grace-A"></span>
+        </div>
+        <div class="term-tools">
+          <label class="check"><input type="checkbox" id="hex-A" checked /> HEX</label>
+          <label class="check"><input type="checkbox" id="ts-A" checked /> 时间戳</label>
+          <label class="check"><input type="checkbox" id="autoscroll-A" checked /> 自动滚动</label>
+          <label class="check"><input type="checkbox" id="paused-A" /> 暂停</label>
+          <button class="btn small ghost" data-term="clear" data-slot="A">清空</button>
+          <button class="btn small ghost" data-term="export" data-slot="A">导出</button>
+          <button class="btn small warn" data-term="reconnect" data-slot="A">宽限重连</button>
+          <button class="btn small danger" data-term="abnormal" data-slot="A">模拟异常断开 (3001)</button>
+          <button class="btn small danger" data-term="close" data-slot="A">正常关闭 1000</button>
+        </div>
+        <div class="term-log" id="log-A"></div>
+        <div class="term-send">
+          <select id="sendmode-A" style="width:74px"><option value="text">文本</option><option value="hex">HEX</option></select>
+          <input id="send-A" type="text" placeholder="输入要发送的内容" />
+          <button class="btn primary" id="sendbtn-A">发送</button>
+        </div>
+      </div>
+
+      <div class="term-pane" data-slot="B">
+        <div class="term-head">
+          <span class="badge slot-b">B</span><span class="port" id="term-port-B">未打开</span>
+          <span class="badge" id="term-state-B">-</span><span class="spacer"></span>
+          <span class="mono-ellipsis muted tiny" id="term-sid-B"></span>
+        </div>
+        <div class="term-meta">
+          <span id="term-counters-B">RX 0 / TX 0 / DROP 0</span>
+          <span id="term-close-B"></span>
+          <span id="term-grace-B"></span>
+        </div>
+        <div class="term-tools">
+          <label class="check"><input type="checkbox" id="hex-B" checked /> HEX</label>
+          <label class="check"><input type="checkbox" id="ts-B" checked /> 时间戳</label>
+          <label class="check"><input type="checkbox" id="autoscroll-B" checked /> 自动滚动</label>
+          <label class="check"><input type="checkbox" id="paused-B" /> 暂停</label>
+          <button class="btn small ghost" data-term="clear" data-slot="B">清空</button>
+          <button class="btn small ghost" data-term="export" data-slot="B">导出</button>
+          <button class="btn small warn" data-term="reconnect" data-slot="B">宽限重连</button>
+          <button class="btn small danger" data-term="abnormal" data-slot="B">模拟异常断开 (3001)</button>
+          <button class="btn small danger" data-term="close" data-slot="B">正常关闭 1000</button>
+        </div>
+        <div class="term-log" id="log-B"></div>
+        <div class="term-send">
+          <select id="sendmode-B" style="width:74px"><option value="text">文本</option><option value="hex">HEX</option></select>
+          <input id="send-B" type="text" placeholder="输入要发送的内容" />
+          <button class="btn primary" id="sendbtn-B">发送</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 调试 -->
+  <section id="tab-debug" class="tab-panel">
+    <div class="grid cols-2" style="margin-bottom:14px">
+      <div class="card">
+        <h2>调试订阅</h2>
+        <div class="row">
+          <label class="check"><input type="checkbox" id="debug-all" checked /> 全部会话</label>
+          <label class="check"><input type="checkbox" id="debug-replay" checked /> replay 回放</label>
+          <button class="btn primary" id="btn-debug-subscribe">订阅</button>
+          <button class="btn ghost" id="btn-debug-unsubscribe">取消订阅</button>
+        </div>
+        <div id="debug-sessions" class="row" style="margin-top:10px"></div>
+        <p class="hint">调试帧是旁路复制，允许丢弃；seq 跳变表示调试事件缺口。</p>
+        <div class="row" style="margin-top:10px">
+          <span class="badge" id="debug-count">0 帧</span>
+          <span class="badge" id="debug-gaps">seq 缺口 0</span>
+          <button class="btn small ghost" id="btn-debug-export">导出调试缓冲</button>
+          <button class="btn small ghost" id="btn-debug-clear">清空</button>
+        </div>
+      </div>
+      <div class="card">
+        <h2>调试写（管理端）</h2>
+        <div class="row">
+          <select id="debug-write-session" style="min-width:220px"></select>
+          <select id="debug-write-mode" style="width:76px"><option value="text">文本</option><option value="hex">HEX</option></select>
+          <input id="debug-write-input" type="text" placeholder="发送到选中的串口" style="flex:1;min-width:160px" />
+          <button class="btn warn" id="btn-debug-write">写入</button>
+        </div>
+        <p class="hint">这是调试用的 <code>session.write</code>，会与生产网页共用同一串口；仅 active 会话可写。</p>
+        <div class="mono-ellipsis small" id="debug-write-result" style="margin-top:8px"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>调试帧 <span class="badge" id="debug-sub-state">未订阅</span></h2>
+      <div class="table-wrap debug-table">
+        <table>
+          <thead><tr><th>时间</th><th>会话</th><th>方向</th><th>seq</th><th>大小</th><th>HEX / ASCII</th></tr></thead>
+          <tbody id="debug-body"></tbody>
+        </table>
+      </div>
+      <div class="empty" id="debug-empty">尚未收到调试帧</div>
+    </div>
+  </section>
+
+  <!-- 边界 -->
+  <section id="tab-edge" class="tab-panel">
+    <div class="card" style="margin-bottom:14px">
+      <h2>边界与错误码自检</h2>
+      <p class="hint">部分操作会断开 A 的数据 WS 或改变会话状态；测试后可用终端的“宽限重连”或“正常关闭”恢复。</p>
+      <div class="row" style="margin-top:10px">
+        <button class="btn danger" data-edge="second-client">第二数据客户端 → 4002</button>
+        <button class="btn danger" data-edge="active-open">active 重复 open → PORT_BUSY</button>
+        <button class="btn danger" data-edge="bad-token">错误 token → 握手失败</button>
+        <button class="btn danger" data-edge="missing-port">不存在串口 → PORT_NOT_FOUND</button>
+        <button class="btn warn" data-edge="write-inactive">非 active 调试写 → SESSION_STATE</button>
+        <button class="btn warn" data-edge="unknown-action">未知 action → UNKNOWN_ACTION</button>
+        <button class="btn warn" data-edge="text-frame">文本帧 → 1003</button>
+        <button class="btn warn" data-edge="oversize">超大帧 → 1009</button>
+        <button class="btn warn" data-edge="abnormal">异常断开 → grace</button>
+        <button class="btn warn" data-edge="normal-close">正常关闭 → 释放端口</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>边界结果</h2>
+      <div class="events" id="edge-log"></div>
+    </div>
+  </section>
+
+  <!-- 事件 -->
+  <section id="tab-events" class="tab-panel">
+    <div class="card">
+      <h2>管理事件 / 操作日志</h2>
+      <div class="row" style="margin-bottom:10px">
+        <input id="event-filter" type="text" placeholder="过滤..." style="flex:1;min-width:200px" />
+        <button class="btn ghost" id="btn-event-clear">清空</button>
+        <button class="btn ghost" id="btn-event-export">导出 JSON</button>
+        <span class="badge" id="event-count">0</span>
+      </div>
+      <div class="events" id="event-log"></div>
+    </div>
+  </section>
+</main>
+
+<footer style="padding:0 22px 24px;color:var(--dim);font-size:11.5px">
+  WebSocket2Serial demo · 管理 WS 127.0.0.1:8765 · 数据 WS 每会话动态端口 · 页面 Origin <span id="footer-origin">-</span>
+</footer>
+
+<script>
+(() => {
+  "use strict";
+
+  // ----------------------------- utilities -----------------------------
+  const $ = (sel, root = document) => root.querySelector(sel);
+  const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const now = () => Date.now();
+  const shortId = (id) => (id ? String(id).slice(0, 8) : "-");
+  const fmtTime = (ms) => {
+    const d = new Date(ms);
+    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}.${String(ms % 1000).padStart(3, "0")}`;
+  };
+  const bytesToHex = (bytes) => Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join(" ");
+  const bytesToAscii = (bytes) => Array.from(bytes, (b) => (b >= 32 && b < 127 ? String.fromCharCode(b) : ".")).join("");
+  const bytesEqual = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+  const textEncoder = new TextEncoder();
+  const textDecoder = new TextDecoder();
+  const b64encodeBytes = (bytes) => {
+    let s = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(s);
+  };
+  const b64decodeBytes = (b64) => {
+    const s = atob(b64);
+    const out = new Uint8Array(s.length);
+    for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+    return out;
+  };
+  const hexToBytes = (text) => {
+    const clean = String(text).replace(/[^0-9a-fA-F]/g, "");
+    if (!clean.length) throw new Error("HEX 内容为空");
+    if (clean.length % 2) throw new Error("HEX 长度必须为偶数");
+    const out = new Uint8Array(clean.length / 2);
+    for (let i = 0; i < out.length; i++) out[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
+    return out;
+  };
+  const pattern = (n) => Uint8Array.from({ length: n }, (_, i) => (i * 37 + 11) & 0xff);
+  // Chromium/Firefox 会拒绝这些端口的 WS 连接（ERR_UNSAFE_PORT）。数据面是动态端口，
+  // 命中时重新打开会话换一个端口，避免演示/客户端无故握手失败。
+  const BROWSER_BLOCKED_PORTS = new Set([
+    1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95,
+    101, 102, 103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137, 138, 139, 143,
+    161, 179, 389, 427, 465, 512, 513, 514, 515, 526, 530, 531, 532, 540, 548, 554, 556,
+    563, 587, 601, 636, 989, 990, 993, 995, 1719, 1720, 1723, 2049, 3659, 4045, 5060,
+    5061, 6000, 6566, 6665, 6666, 6667, 6668, 6669, 6697, 10080,
+  ]);
+  const dataUrlPort = (url) => { try { return Number(new URL(url).port) || 0; } catch { return 0; } };
+  const blockedDataUrl = (url) => BROWSER_BLOCKED_PORTS.has(dataUrlPort(url));
+  const escapeSelector = (s) => String(s).replace(/["\\]/g, "\\$&");
+  const el = (tag, cls, text) => {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = String(text);
+    return n;
+  };
+  const download = (name, text, mime = "text/plain;charset=utf-8") => {
+    const blob = new Blob([text], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+  const toast = (message, kind = "") => {
+    const box = $("#banner");
+    box.textContent = message;
+    box.className = "banner" + (kind ? " " + kind : "");
+    box.classList.remove("hidden");
+    clearTimeout(toast._t);
+    toast._t = setTimeout(() => box.classList.add("hidden"), 6000);
+  };
+  const stateClass = (s) => ["awaiting", "active", "grace", "closed", "error"].includes(s) ? s : "";
+
+  // ----------------------------- state -----------------------------
+  const state = {
+    mgmtPort: 8765,
+    mgmt: null,
+    hello: null,
+    ports: [],
+    sessions: new Map(),
+    slots: { A: null, B: null },
+    adminEnabled: null,
+    autostart: null,
+    events: [],
+    debug: { subscribed: false, all: true, ids: new Set(), frames: [], lastSeq: new Map(), gaps: 0, overflow: false },
+    runner: { running: false, steps: [] },
+    terminalPrefs: { A: { hex: true, ts: true, autoscroll: true, paused: false }, B: { hex: true, ts: true, autoscroll: true, paused: false } },
+    autoReconnect: false,
+    pollBusy: false,
+    closedCodes: new Map(),
+  };
+  let alignInFlight = null;
+
+  // ----------------------------- logging -----------------------------
+  function logEvent(kind, data) {
+    const entry = { ts: now(), kind, data };
+    state.events.push(entry);
+    if (state.events.length > 1500) state.events.splice(0, state.events.length - 1500);
+    renderEvents();
+    if (kind === "error") toast(typeof data === "string" ? data : data.message || "操作失败", "err");
+  }
+  function renderEvents() {
+    const filter = ($("#event-filter")?.value || "").trim().toLowerCase();
+    const box = $("#event-log");
+    if (!box) return;
+    box.textContent = "";
+    const frag = document.createDocumentFragment();
+    for (const ev of state.events) {
+      let text;
+      try { text = typeof ev.data === "string" ? ev.data : JSON.stringify(ev.data); } catch { text = String(ev.data); }
+      if (filter && !(ev.kind + " " + text).toLowerCase().includes(filter)) continue;
+      const line = el("div", "event-line");
+      line.appendChild(el("span", "ev-ts", fmtTime(ev.ts)));
+      const k = el("span", "ev-kind" + (ev.kind === "error" ? " err" : ev.kind === "ok" ? " ok" : ""), ev.kind);
+      line.appendChild(k);
+      line.appendChild(el("span", "", text));
+      frag.appendChild(line);
+    }
+    box.appendChild(frag);
+    $("#event-count").textContent = String(state.events.length);
+  }
+  function edgeLog(text) {
+    const box = $("#edge-log");
+    if (!box) return;
+    const line = el("div", "event-line");
+    line.appendChild(el("span", "ev-ts", fmtTime(now())));
+    line.appendChild(el("span", "ev-kind", "edge"));
+    line.appendChild(el("span", "", text));
+    box.appendChild(line);
+    box.scrollTop = box.scrollHeight;
+  }
+
+  // ----------------------------- management client -----------------------------
+  class ManagementClient {
+    constructor(port, ui) {
+      this.port = port;
+      this.ui = ui;
+      this.ws = null;
+      this.manual = false;
+      this.retry = 0;
+      this.pending = new Map();
+      this.hello = null;
+      this.connectPromise = null;
+      this.resolveConnect = null;
+      this.rejectConnect = null;
+      this.connectTimer = null;
+      this.reconnectTimer = null;
+      this.debugSub = null;
+      this._rid = 0;
+    }
+    get open() { return !!this.ws && this.ws.readyState === WebSocket.OPEN; }
+    async connect() {
+      if (this.open && this.hello) return this.hello;
+      if (this.connectPromise) return this.connectPromise;
+      this.manual = false;
+      this.connectPromise = new Promise((resolve, reject) => {
+        this.resolveConnect = resolve;
+        this.rejectConnect = reject;
+      });
+      this.connectTimer = setTimeout(() => {
+        if (this.connectPromise) {
+          this.failConnect(new Error("连接管理 WS 超时"));
+          try { this.ws?.close(); } catch {}
+        }
+      }, 6000);
+      this._open();
+      return this.connectPromise;
+    }
+    _open() {
+      this.closeSocket();
+      this.setStatus("connecting");
+      const ws = new WebSocket(`ws://127.0.0.1:${this.port}/ws`);
+      this.ws = ws;
+      ws.onopen = () => {
+        this.retry = 0;
+        this.setStatus("open");
+      };
+      ws.onmessage = (ev) => this._onMessage(ev.data);
+      ws.onerror = () => { this.setStatus("error"); };
+      ws.onclose = (ev) => {
+        for (const [, p] of this.pending) {
+          clearTimeout(p.timer);
+          p.reject(new Error(`管理 WS 已关闭 (${ev.code})`));
+        }
+        this.pending.clear();
+        if (this.hello) this.hello = null;
+        this.setStatus("closed", ev.code);
+        if (this.connectPromise) this.failConnect(new Error(`管理 WS 连接失败 (${ev.code})`));
+        if (!this.manual) this.scheduleReconnect();
+      };
+    }
+    scheduleReconnect() {
+      clearTimeout(this.reconnectTimer);
+      const delay = Math.min(5000, 500 * Math.pow(2, Math.min(this.retry++, 4)));
+      this.reconnectTimer = setTimeout(() => {
+        if (!this.manual) {
+          logEvent("info", `管理 WS ${delay}ms 后重连`);
+          this.connectPromise = null;
+          this.hello = null;
+          this._open();
+        }
+      }, delay);
+    }
+    failConnect(err) {
+      clearTimeout(this.connectTimer);
+      const reject = this.rejectConnect;
+      this.connectPromise = null;
+      this.resolveConnect = null;
+      this.rejectConnect = null;
+      if (reject) reject(err);
+    }
+    closeSocket() {
+      if (this.ws) {
+        try { this.ws.onclose = null; this.ws.close(); } catch {}
+        this.ws = null;
+      }
+    }
+    close() {
+      this.manual = true;
+      clearTimeout(this.reconnectTimer);
+      this.closeSocket();
+      this.setStatus("closed");
+    }
+    async reconnect() {
+      this.manual = false;
+      this.connectPromise = null;
+      this.closeSocket();
+      this.hello = null;
+      this.connectPromise = new Promise((resolve, reject) => { this.resolveConnect = resolve; this.rejectConnect = reject; });
+      this.connectTimer = setTimeout(() => { if (this.connectPromise) this.failConnect(new Error("重连超时")); }, 6000);
+      this._open();
+      return this.connectPromise;
+    }
+    setStatus(s, code) {
+      const pill = $("#pill-mgmt");
+      if (!pill) return;
+      const map = {
+        connecting: ["管理 WS：连接中", "warn"],
+        open: ["管理 WS：已连接", "ok"],
+        closed: [`管理 WS：已断开${code ? " (" + code + ")" : ""}`, "err"],
+        error: ["管理 WS：错误", "err"],
+      };
+      const [text, cls] = map[s] || ["管理 WS：-", ""];
+      pill.textContent = text;
+      pill.className = "pill " + cls;
+    }
+    _onMessage(raw) {
+      let msg;
+      try { msg = JSON.parse(raw); } catch { logEvent("error", "管理 WS 返回非 JSON"); return; }
+      if (msg.event) {
+        if (msg.event === "hello") {
+          this.hello = msg.data;
+          if (this.connectPromise) {
+            clearTimeout(this.connectTimer);
+            const resolve = this.resolveConnect;
+            this.connectPromise = null;
+            this.resolveConnect = null;
+            this.rejectConnect = null;
+            resolve?.(msg.data);
+          }
+        }
+        this.ui.onEvent(msg.event, msg.data);
+        if (msg.event === "hello") this.ui.onHello(msg.data);
+        return;
+      }
+      if (msg.id && this.pending.has(msg.id)) {
+        const p = this.pending.get(msg.id);
+        this.pending.delete(msg.id);
+        clearTimeout(p.timer);
+        msg.ok ? p.resolve(msg) : p.reject(new Error(`${msg.error?.code || "ERROR"}: ${msg.error?.message || ""}`), msg);
+      }
+    }
+    request(action, params = {}, timeout = 5000) {
+      if (!this.open) return Promise.reject(new Error("管理 WS 未连接"));
+      const id = `r${++this._rid}`;
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          this.pending.delete(id);
+          reject(new Error(`${action} 超时`));
+        }, timeout);
+        this.pending.set(id, { resolve, reject, timer, action });
+        try {
+          this.ws.send(JSON.stringify({ id, action, params }));
+        } catch (e) {
+          clearTimeout(timer);
+          this.pending.delete(id);
+          reject(e);
+        }
+      });
+    }
+    async subscribeDebug(ids, replay = true) {
+      const r = await this.request("debug.subscribe", { sessionIds: ids, replay });
+      state.debug.subscribed = true;
+      state.debug.all = ids === "all";
+      state.debug.ids = new Set(ids === "all" ? [] : ids);
+      state.debug.overflow = false;
+      renderDebugOptions();
+      renderDebugState();
+      return r;
+    }
+    async unsubscribeDebug() {
+      await this.request("debug.subscribe", { sessionIds: [], replay: false });
+      state.debug.subscribed = false;
+      state.debug.ids.clear();
+      renderDebugOptions();
+      renderDebugState();
+    }
+  }
+
+  // ----------------------------- data session -----------------------------
+  class SessionController {
+    constructor(slot, info, params, mgmt) {
+      this.slot = slot;
+      this.sessionId = info.sessionId;
+      this.dataUrl = info.dataUrl;
+      this.params = params;
+      this.mgmt = mgmt;
+      this.ws = null;
+      this.state = info.state || "awaiting";
+      this.counters = info.counters || { rxBytes: 0, txBytes: 0, rxDiscardedBytes: 0 };
+      this.graceEndsAt = null;
+      this.lastGap = null;
+      this.lastError = null;
+      this.frames = [];
+      this.frameBytes = 0;
+      this.buffer = new Uint8Array(0);
+      this.waiters = [];
+      this.closeCode = null;
+      this.closeReason = "";
+      this._closeWaiters = [];
+      this.manual = false;
+      this.connecting = false;
+      this.autoReconnect = false;
+      this.reconnectTimer = null;
+      this._updateTerminalHead();
+    }
+    async connectData(timeout = 5000) {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) return;
+      this.manual = false;
+      this.connecting = true;
+      const url = this.dataUrl;
+      return new Promise((resolve, reject) => {
+        const ws = new WebSocket(url);
+        ws.binaryType = "arraybuffer";
+        this.ws = ws;
+        let settled = false;
+        const timer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          this.connecting = false;
+          try { ws.close(); } catch {}
+          reject(new Error("数据 WS 连接超时"));
+        }, timeout);
+        ws.onopen = () => {
+          if (settled) return;
+          settled = true;
+          this.connecting = false;
+          clearTimeout(timer);
+          this.state = "active";
+          this.closeCode = null;
+          this._updateTerminalHead();
+          renderSessions();
+          logEvent("ok", `${this.slot} 数据 WS 已连接 (${url.split("/").pop()?.slice(0, 8)})`);
+          resolve();
+        };
+        ws.onmessage = (ev) => {
+          if (!(ev.data instanceof ArrayBuffer)) {
+            logEvent("error", `${this.slot} 数据 WS 收到非二进制帧`);
+            return;
+          }
+          const bytes = new Uint8Array(ev.data);
+          this._appendBuffer(bytes);
+          this._appendFrame("RX", bytes);
+        };
+        ws.onerror = () => {
+          if (!settled) {
+            settled = true;
+            this.connecting = false;
+            clearTimeout(timer);
+            reject(new Error("数据 WS 连接失败"));
+          }
+        };
+        ws.onclose = (ev) => {
+          this.connecting = false;
+          this.closeCode = ev.code;
+          this.closeReason = ev.reason || "";
+          this.state = [1000, 4001, 4004, 4005, 4007].includes(ev.code) ? "closed" : "grace";
+          this._updateTerminalHead();
+          renderSessions();
+          logEvent(ev.code === 1000 ? "ok" : "warn", `${this.slot} 数据 WS 关闭 code=${ev.code} ${ev.reason || ""}`);
+          for (const done of this._closeWaiters.splice(0)) done();
+          if (!settled) {
+            settled = true;
+            clearTimeout(timer);
+            reject(new Error(`数据 WS 连接失败 (${ev.code})`));
+          }
+          if (!this.manual && ev.code !== 1000 && this.autoReconnect) this._scheduleReconnect();
+        };
+      });
+    }
+    _scheduleReconnect() {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = setTimeout(async () => {
+        if (this.manual) return;
+        try {
+          await this.reconnectOld();
+          logEvent("ok", `${this.slot} 自动重连成功`);
+        } catch (e) {
+          logEvent("error", `${this.slot} 自动重连失败: ${e.message}`);
+        }
+      }, 350);
+    }
+    async reconnectOld() {
+      this.manual = false;
+      try {
+        await this.connectData(3000);
+        return;
+      } catch (e) {
+        // fall through to session.open reuse
+      }
+      let lastErr = null;
+      for (let i = 0; i < 6; i++) {
+        try {
+          const r = await this.mgmt.request("session.open", this.params);
+          const d = r.data;
+          this.sessionId = d.sessionId;
+          this.dataUrl = d.dataUrl;
+          this.state = "awaiting";
+          await this.connectData(3000);
+          return;
+        } catch (e) {
+          lastErr = e;
+          await sleep(250);
+        }
+      }
+      throw lastErr || new Error("重连失败");
+    }
+    _appendBuffer(bytes) {
+      if (!bytes.length) return;
+      const next = new Uint8Array(this.buffer.length + bytes.length);
+      next.set(this.buffer, 0);
+      next.set(bytes, this.buffer.length);
+      this.buffer = next;
+      if (this.buffer.length > 4 * 1024 * 1024) this.buffer = this.buffer.slice(this.buffer.length - 4 * 1024 * 1024);
+      this._flushWaiters();
+    }
+    _flushWaiters() {
+      while (this.waiters.length) {
+        const w = this.waiters[0];
+        if (this.buffer.length < w.n) break;
+        this.waiters.shift();
+        clearTimeout(w.timer);
+        const out = this.buffer.slice(0, w.n);
+        this.buffer = this.buffer.slice(w.n);
+        w.resolve(out);
+      }
+    }
+    takeBytes(n, timeout = 5000) {
+      if (this.buffer.length >= n) {
+        const out = this.buffer.slice(0, n);
+        this.buffer = this.buffer.slice(n);
+        return Promise.resolve(out);
+      }
+      return new Promise((resolve, reject) => {
+        const w = { n, resolve, reject };
+        w.timer = setTimeout(() => {
+          const i = this.waiters.indexOf(w);
+          if (i >= 0) this.waiters.splice(i, 1);
+          reject(new Error(`等待 ${n} 字节超时（当前缓冲 ${this.buffer.length}）`));
+        }, timeout);
+        this.waiters.push(w);
+      });
+    }
+    clearBuffer() { this.buffer = new Uint8Array(0); }
+    sendBytes(bytes) {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) throw new Error(`${this.slot} 数据 WS 未连接`);
+      this.ws.send(bytes);
+      this._appendFrame("TX", bytes);
+    }
+    sendText(text) { this.sendBytes(textEncoder.encode(text)); }
+    sendHex(text) { this.sendBytes(hexToBytes(text)); }
+    closeData(code = 1000, reason = "") {
+      this.manual = true;
+      clearTimeout(this.reconnectTimer);
+      if (this.ws && this.ws.readyState <= WebSocket.OPEN) {
+        try { this.ws.close(code, reason); } catch {}
+      }
+      this.state = code === 1000 ? "closed" : this.state;
+      this._updateTerminalHead();
+      renderSessions();
+    }
+    disconnectAbnormal(code = 3001) {
+      // WebSocket API 只允许 1000 或 3000-4999；1001 会抛 InvalidAccessError。
+      // 非 1000 的应用关闭码会被服务端视为异常断开并进入 grace。
+      this.closeData(code, "demo-abnormal");
+    }
+    waitClose(timeout = 2500) {
+      if (!this.ws || this.ws.readyState === WebSocket.CLOSED) return Promise.resolve();
+      return new Promise((resolve) => {
+        let done = false;
+        const finish = () => { if (done) return; done = true; clearTimeout(timer); resolve(); };
+        const timer = setTimeout(finish, timeout);
+        this._closeWaiters.push(finish);
+      });
+    }
+    /**
+     * 关闭会话。
+     * - client=true：模拟网页主动正常关闭（数据 WS 1000），由服务端销毁会话。
+     * - 默认：走管理端 session.close（数据 WS 收到 4004），响应返回时端口已释放。
+     */
+    async closeSession(client = false) {
+      this.manual = true;
+      clearTimeout(this.reconnectTimer);
+      if (client && this.ws && this.ws.readyState <= WebSocket.OPEN) {
+        const closed = this.waitClose(2500);
+        try { this.ws.close(1000, "demo-client-close"); } catch {}
+        await closed;
+        await sleep(120);
+        try {
+          const r = await this.mgmt.request("session.list");
+          if ((r.data.sessions || []).some((s) => s.sessionId === this.sessionId)) {
+            await this.mgmt.request("session.close", { sessionId: this.sessionId }).catch(() => {});
+          }
+        } catch { /* 会话已销毁 */ }
+      } else {
+        try {
+          await this.mgmt.request("session.close", { sessionId: this.sessionId });
+        } catch { /* 已关闭或已过期 */ }
+        if (this.ws && this.ws.readyState <= WebSocket.OPEN) {
+          try { this.ws.close(1000, "admin-close"); } catch {}
+        }
+      }
+      this.state = "closed";
+      this._updateTerminalHead();
+      renderSessions();
+    }
+    updateInfo(info) {
+      if (!info) return;
+      this.state = info.state;
+      this.counters = info.counters || this.counters;
+      this.graceEndsAt = info.graceEndsAt || null;
+      this.lastGap = info.lastGap || null;
+      this.lastError = info.lastError || null;
+      if (info.closeCode != null) this.closeCode = info.closeCode;
+      this._updateTerminalHead();
+      this._renderMeta();
+    }
+    _appendFrame(dir, bytes) {
+      const frame = { ts: now(), dir, bytes: new Uint8Array(bytes) };
+      this.frames.push(frame);
+      this.frameBytes += frame.bytes.length;
+      while (this.frames.length > 5000 || this.frameBytes > 4 * 1024 * 1024) {
+        const f = this.frames.shift();
+        this.frameBytes -= f.bytes.length;
+      }
+      appendTerminalLine(this.slot, frame);
+      this._renderMeta();
+    }
+    _updateTerminalHead() {
+      const port = $("#term-port-" + this.slot);
+      const st = $("#term-state-" + this.slot);
+      const sid = $("#term-sid-" + this.slot);
+      if (port) port.textContent = this.params?.path || "-";
+      if (st) { st.textContent = this.state; st.className = "badge " + stateClass(this.state); }
+      if (sid) sid.textContent = this.sessionId ? shortId(this.sessionId) : "";
+      this._renderMeta();
+    }
+    _renderMeta() {
+      const c = this.counters || {};
+      const counters = `RX ${c.rxBytes ?? 0} / TX ${c.txBytes ?? 0} / DROP ${c.rxDiscardedBytes ?? 0}`;
+      const ce = $("#term-counters-" + this.slot);
+      if (ce) ce.textContent = counters;
+      const close = $("#term-close-" + this.slot);
+      if (close) close.textContent = this.closeCode == null ? "" : `close ${this.closeCode}${this.closeReason ? " " + this.closeReason : ""}`;
+      const grace = $("#term-grace-" + this.slot);
+      if (grace) {
+        if (this.state === "grace" && this.graceEndsAt) {
+          const left = Math.max(0, Math.ceil((this.graceEndsAt - now()) / 1000));
+          grace.textContent = `grace ${left}s`;
+          grace.className = "red";
+        } else {
+          grace.textContent = "";
+          grace.className = "";
+        }
+      }
+    }
+  }
+
+  // ----------------------------- UI: hello / admin -----------------------------
+  function onHello(data) {
+    state.hello = data;
+    state.adminEnabled = !!data.admin?.enabled;
+    state.autostart = !!data.autostart;
+    $("#hello-protocol").textContent = data.protocol || "-";
+    $("#hello-version").textContent = data.version || "-";
+    $("#hello-os").textContent = `${data.os || "-"} / ${data.arch || "-"}`;
+    $("#hello-admin").textContent = data.admin ? `${data.admin.enabled ? "开启" : "关闭"} ${data.admin.url || ""}` : "-";
+    $("#hello-autostart").textContent = `${data.autostart ? "开启" : "关闭"}（只读，托盘菜单修改）`;
+    $("#link-admin").href = data.admin?.url || "#";
+    $("#pill-version").textContent = `版本：${data.version || "-"}`;
+    renderAdmin();
+    renderHelloSessions();
+    logEvent("event", { event: "hello", data });
+    void alignAfterHello();
+  }
+  async function alignAfterHello() {
+    if (!state.mgmt?.open) return;
+    if (alignInFlight) return alignInFlight;
+    alignInFlight = (async () => {
+      try {
+        await refreshSessions();
+        await refreshPorts();
+        if (state.debug.subscribed) {
+          const ids = state.debug.all ? "all" : Array.from(state.debug.ids);
+          try { await state.mgmt.subscribeDebug(ids, true); } catch (e) { logEvent("error", "恢复调试订阅失败: " + e.message); }
+        }
+      } catch (e) {
+        logEvent("error", "对齐状态失败: " + e.message);
+      }
+    })();
+    try { await alignInFlight; } finally { alignInFlight = null; }
+  }
+  function renderAdmin() {
+    const p = $("#pill-admin");
+    if (state.adminEnabled == null) { p.textContent = "管理页：-"; p.className = "pill"; }
+    else { p.textContent = `管理页：${state.adminEnabled ? "开启" : "关闭"}`; p.className = "pill " + (state.adminEnabled ? "ok" : "warn"); }
+    const b = $("#btn-admin-toggle");
+    if (b) b.textContent = state.adminEnabled ? "关闭管理页" : "开启管理页";
+    const a = $("#hello-admin");
+    if (a && state.hello?.admin) a.textContent = `${state.adminEnabled ? "开启" : "关闭"} ${state.hello.admin.url || ""}`;
+    const link = $("#link-admin");
+    if (link) {
+      const url = state.adminEnabled ? (state.hello?.admin?.url || "") : "";
+      link.href = url || "#";
+      link.style.opacity = url ? "" : ".45";
+      link.style.pointerEvents = url ? "" : "none";
+    }
+    const auto = $("#pill-autostart");
+    if (state.autostart == null) { auto.textContent = "自启：-"; auto.className = "pill"; }
+    else { auto.textContent = `自启：${state.autostart ? "开启" : "关闭"}`; auto.className = "pill " + (state.autostart ? "ok" : "muted"); }
+  }
+  function renderHelloSessions() {
+    const n = state.sessions.size;
+    $("#hello-sessions").textContent = `${n} 个`;
+    $("#sessions-count").textContent = String(n);
+  }
+
+  // ----------------------------- UI: ports -----------------------------
+  async function refreshPorts() {
+    if (!state.mgmt?.open) throw new Error("管理 WS 未连接");
+    const r = await state.mgmt.request("ports.list");
+    state.ports = r.data.ports || [];
+    renderPorts();
+    return state.ports;
+  }
+  function renderPorts() {
+    const body = $("#ports-body");
+    const empty = $("#ports-empty");
+    const datalist = $("#port-list");
+    if (!body || !datalist) return;
+    body.textContent = "";
+    datalist.textContent = "";
+    if (!state.ports.length) {
+      empty.classList.remove("hidden");
+    } else {
+      empty.classList.add("hidden");
+    }
+    for (const p of state.ports) {
+      const tr = document.createElement("tr");
+      tr.appendChild(el("td", "mono", p.path));
+      tr.appendChild(el("td", "", p.portType || "-"));
+      tr.appendChild(el("td", "", p.manufacturer || "-"));
+      tr.appendChild(el("td", "", p.product || "-"));
+      tr.appendChild(el("td", "mono", p.serialNumber || "-"));
+      tr.appendChild(el("td", "mono", p.vid != null || p.pid != null ? `${p.vid ?? "?"}/${p.pid ?? "?"}` : "-"));
+      const actions = document.createElement("td");
+      const ba = el("button", "btn small ghost", "设为 A");
+      ba.addEventListener("click", () => { $("#path-A").value = p.path; });
+      const bb = el("button", "btn small ghost", "设为 B");
+      bb.addEventListener("click", () => { $("#path-B").value = p.path; });
+      actions.appendChild(ba); actions.appendChild(document.createTextNode(" ")); actions.appendChild(bb);
+      tr.appendChild(actions);
+      body.appendChild(tr);
+      const opt = el("option", "", p.path);
+      opt.value = p.path;
+      datalist.appendChild(opt);
+    }
+    if (!$("#path-A").value && state.ports[0]) $("#path-A").value = state.ports[0].path;
+    if (!$("#path-B").value && state.ports[1]) $("#path-B").value = state.ports[1].path;
+    $("#ports-count").textContent = String(state.ports.length);
+    logEvent("info", `端口列表 ${state.ports.length} 个: ${state.ports.map((p) => p.path).join(", ") || "无"}`);
+  }
+
+  // ----------------------------- UI: sessions -----------------------------
+  function readOpenParams(pathOverride) {
+    const path = String(pathOverride ?? $("#path-A").value ?? "").trim();
+    if (!path) throw new Error("请选择或输入串口");
+    const baudRate = Number($("#baud").value);
+    if (!Number.isInteger(baudRate) || baudRate <= 0) throw new Error("波特率必须是正整数");
+    const params = {
+      path,
+      baudRate,
+      dataBits: Number($("#databits").value),
+      parity: $("#parity").value,
+      stopBits: Number($("#stopbits").value),
+      flowControl: $("#flowcontrol").value,
+    };
+    if ($("#dtr").value !== "default") params.dtr = $("#dtr").value === "true";
+    if ($("#rts").value !== "default") params.rts = $("#rts").value === "true";
+    return params;
+  }
+  function slotForSession(sessionId) {
+    for (const s of ["A", "B"]) if (state.slots[s]?.sessionId === sessionId) return s;
+    return null;
+  }
+  async function openSlot(slot) {
+    const path = $(`#path-${slot}`).value.trim();
+    if (!path) throw new Error(`请先选择 ${slot} 串口`);
+    if (state.slots[slot] && state.slots[slot].state !== "closed") throw new Error(`${slot} 已有会话，请先关闭`);
+    if (state.slots[slot]) { state.slots[slot] = null; }
+    const params = readOpenParams(path);
+    let r = null;
+    let lastErr = null;
+    for (let attempt = 0; attempt < 10; attempt++) {
+      try {
+        r = await state.mgmt.request("session.open", params);
+      } catch (e) {
+        lastErr = e;
+        // 端口可能正在异步释放（例如刚关闭）：短暂重试即可，不掩盖真正的占用。
+        if (!String(e.message).includes("PORT_BUSY")) throw e;
+        await sleep(120);
+        continue;
+      }
+      if (blockedDataUrl(r.data.dataUrl)) {
+        lastErr = new Error(`动态数据端口 ${dataUrlPort(r.data.dataUrl)} 被浏览器禁止，已换端口重试`);
+        logEvent("warn", lastErr.message);
+        await state.mgmt.request("session.close", { sessionId: r.data.sessionId }).catch(() => {});
+        await sleep(100);
+        r = null;
+        continue;
+      }
+      break;
+    }
+    if (!r) throw lastErr || new Error("打开会话失败");
+    const d = r.data;
+    state.sessions.set(d.sessionId, {
+      sessionId: d.sessionId,
+      state: d.state || "awaiting",
+      port: path,
+      params,
+      counters: d.counters || { rxBytes: 0, txBytes: 0, rxDiscardedBytes: 0 },
+      dataPort: (() => { try { return Number(new URL(d.dataUrl).port); } catch { return null; } })(),
+    });
+    const c = new SessionController(slot, { ...d, state: "awaiting" }, params, state.mgmt);
+    c.autoReconnect = state.autoReconnect;
+    state.slots[slot] = c;
+    renderSessions();
+    try {
+      await c.connectData();
+    } catch (e) {
+      logEvent("error", `${slot} 打开后连接数据 WS 失败: ${e.message}`);
+    }
+    logEvent("ok", `${slot} 已打开 ${path} (${d.reused ? "复用" : "新建"})`);
+    renderTerminal();
+    return c;
+  }
+  async function closeSlot(slot, client = false) {
+    const c = state.slots[slot];
+    if (!c) return;
+    await c.closeSession(client);
+    state.slots[slot] = null;
+    state.sessions.delete(c.sessionId);
+    renderSessions();
+    renderTerminal();
+    logEvent("info", `${slot} 已关闭`);
+  }
+  async function refreshSessions() {
+    if (!state.mgmt?.open) return;
+    const r = await state.mgmt.request("session.list");
+    const list = r.data.sessions || [];
+    state.sessions.clear();
+    for (const s of list) state.sessions.set(s.sessionId, s);
+    for (const slot of ["A", "B"]) {
+      const c = state.slots[slot];
+      if (!c) continue;
+      const info = state.sessions.get(c.sessionId);
+      if (info) c.updateInfo(info);
+      else if (c.state !== "closed") {
+        // session disappeared without a state event; mark closed for UI
+        c.state = "closed";
+        c._updateTerminalHead();
+      }
+    }
+    renderSessions();
+    renderTerminalMeta();
+    renderDebugOptions();
+    renderDebugWriteOptions();
+    renderHelloSessions();
+  }
+  function renderSessions() {
+    const body = $("#sessions-body");
+    const empty = $("#sessions-empty");
+    if (!body) return;
+    body.textContent = "";
+    const rows = Array.from(state.sessions.values());
+    if (!rows.length) empty.classList.remove("hidden"); else empty.classList.add("hidden");
+    for (const s of rows) {
+      const tr = document.createElement("tr");
+      const slot = slotForSession(s.sessionId);
+      const tdSlot = document.createElement("td");
+      if (slot) tdSlot.appendChild(el("span", "badge slot-" + slot.toLowerCase(), slot));
+      else tdSlot.textContent = "-";
+      tr.appendChild(tdSlot);
+      tr.appendChild(el("td", "mono", s.port || "-"));
+      const tdState = document.createElement("td");
+      const b = el("span", "badge " + stateClass(s.state), s.state || "-");
+      tdState.appendChild(b);
+      tr.appendChild(tdState);
+      const p = s.params || {};
+      tr.appendChild(el("td", "mono", `${p.baudRate ?? "?"} ${p.dataBits ?? "?"}${p.parity ?? "?"}${p.stopBits ?? "?"} ${p.flowControl ?? ""}`));
+      const c = s.counters || {};
+      tr.appendChild(el("td", "mono", `${c.rxBytes ?? 0} / ${c.txBytes ?? 0} / ${c.rxDiscardedBytes ?? 0}`));
+      tr.appendChild(el("td", "mono", s.lastGap ? `${s.lastGap.discardedBytes} B / ${s.lastGap.durationMs ?? "?"} ms` : "-"));
+      tr.appendChild(el("td", "mono", s.lastError ? `${s.lastError.code}: ${s.lastError.message}` : "-"));
+      const td = document.createElement("td");
+      const close = el("button", "btn small ghost", "关闭");
+      close.addEventListener("click", async () => {
+        try {
+          if (slot) await closeSlot(slot);
+          else { await state.mgmt.request("session.close", { sessionId: s.sessionId }); await refreshSessions(); }
+        } catch (e) { logEvent("error", e.message); }
+      });
+      td.appendChild(close);
+      tr.appendChild(td);
+      body.appendChild(tr);
+    }
+    $("#sessions-count").textContent = String(rows.length);
+    renderHelloSessions();
+    renderDebugOptions();
+    renderDebugWriteOptions();
+  }
+
+  // ----------------------------- terminal -----------------------------
+  function terminalPrefs(slot) { return state.terminalPrefs[slot]; }
+  function renderTerminal() {
+    for (const slot of ["A", "B"]) renderTerminalLog(slot);
+    renderTerminalMeta();
+  }
+  function renderTerminalMeta() {
+    for (const slot of ["A", "B"]) {
+      const c = state.slots[slot];
+      if (c) c._renderMeta();
+      else {
+        const st = $("#term-state-" + slot);
+        const port = $("#term-port-" + slot);
+        const sid = $("#term-sid-" + slot);
+        if (st) { st.textContent = "-"; st.className = "badge"; }
+        if (port) port.textContent = "未打开";
+        if (sid) sid.textContent = "";
+        const ce = $("#term-counters-" + slot); if (ce) ce.textContent = "RX 0 / TX 0 / DROP 0";
+        const cl = $("#term-close-" + slot); if (cl) cl.textContent = "";
+        const gr = $("#term-grace-" + slot); if (gr) gr.textContent = "";
+      }
+    }
+  }
+  function renderTerminalLog(slot) {
+    const box = $("#log-" + slot);
+    if (!box) return;
+    const c = state.slots[slot];
+    box.textContent = "";
+    if (!c || !c.frames.length) {
+      box.appendChild(el("div", "empty", c ? "暂无收发" : "未打开会话"));
+      return;
+    }
+    const frag = document.createDocumentFragment();
+    for (const f of c.frames) frag.appendChild(makeTerminalLine(slot, f));
+    box.appendChild(frag);
+    box.scrollTop = box.scrollHeight;
+  }
+  function makeTerminalLine(slot, frame) {
+    const p = terminalPrefs(slot);
+    const line = el("div", "log-line");
+    line.appendChild(el("span", "ts", p.ts ? fmtTime(frame.ts) : ""));
+    line.appendChild(el("span", "dir " + (frame.dir === "RX" ? "rx" : "tx"), frame.dir));
+    let body;
+    if (p.hex) {
+      const max = 512;
+      body = bytesToHex(frame.bytes.subarray(0, max));
+      if (frame.bytes.length > max) body += ` … (+${frame.bytes.length - max} B)`;
+    } else {
+      body = bytesToAscii(frame.bytes);
+      if (body.length > 512) body = body.slice(0, 512) + `… (+${frame.bytes.length - 512} B)`;
+    }
+    line.appendChild(el("span", "body", body));
+    return line;
+  }
+  function appendTerminalLine(slot, frame) {
+    const p = terminalPrefs(slot);
+    if (p.paused) return;
+    const box = $("#log-" + slot);
+    if (!box) return;
+    if (box.querySelector(".empty")) box.textContent = "";
+    box.appendChild(makeTerminalLine(slot, frame));
+    while (box.childElementCount > 5000) box.firstElementChild?.remove();
+    if (p.autoscroll) box.scrollTop = box.scrollHeight;
+  }
+  function bindTerminalPrefs(slot) {
+    const hex = $("#hex-" + slot);
+    const ts = $("#ts-" + slot);
+    const auto = $("#autoscroll-" + slot);
+    const paused = $("#paused-" + slot);
+    const sync = () => {
+      const p = terminalPrefs(slot);
+      p.hex = hex.checked; p.ts = ts.checked; p.autoscroll = auto.checked; p.paused = paused.checked;
+      renderTerminalLog(slot);
+    };
+    [hex, ts, auto, paused].forEach((x) => x?.addEventListener("change", sync));
+  }
+  function sendFromSlot(slot) {
+    const c = state.slots[slot];
+    if (!c) return toast(`${slot} 未打开`, "err");
+    const mode = $("#sendmode-" + slot).value;
+    const text = $("#send-" + slot).value;
+    if (!text.length) return;
+    try {
+      if (mode === "hex") c.sendHex(text); else c.sendText(text);
+      $("#send-" + slot).value = "";
+    } catch (e) {
+      logEvent("error", `${slot} 发送失败: ${e.message}`);
+    }
+  }
+  async function loopback(fromSlot, toSlot) {
+    const a = state.slots[fromSlot];
+    const b = state.slots[toSlot];
+    if (!a || !b) throw new Error("请先打开 A 和 B");
+    if (a.state !== "active" || b.state !== "active") throw new Error("A/B 数据 WS 都必须是 active");
+    a.clearBuffer(); b.clearBuffer();
+    const payload = pattern(4096);
+    a.sendBytes(payload);
+    const got = await b.takeBytes(payload.length, 6000);
+    if (!bytesEqual(got, payload)) {
+      let at = 0; while (at < got.length && got[at] === payload[at]) at++;
+      throw new Error(`回环内容不一致（收到 ${got.length}/${payload.length}，首个差异 @${at}）`);
+    }
+    $("#loop-result").textContent = `${fromSlot} → ${toSlot} 4096 字节一致`;
+    logEvent("ok", `${fromSlot} → ${toSlot} 回环 4096 字节通过`);
+    return true;
+  }
+  function exportTerminal(slot) {
+    const c = state.slots[slot];
+    if (!c) return;
+    const lines = c.frames.map((f) => `${fmtTime(f.ts)}\t${f.dir}\t${bytesToHex(f.bytes)}\t${bytesToAscii(f.bytes)}`);
+    download(`ws2s-${slot}-${Date.now()}.txt`, lines.join("\n"));
+  }
+
+  // ----------------------------- debug -----------------------------
+  function renderDebugOptions() {
+    const box = $("#debug-sessions");
+    if (!box) return;
+    const current = new Set(state.debug.ids);
+    const all = $("#debug-all")?.checked !== false;
+    box.textContent = "";
+    for (const s of state.sessions.values()) {
+      const label = el("label", "check");
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.dataset.session = s.sessionId;
+      cb.checked = all || current.has(s.sessionId);
+      cb.disabled = all;
+      label.appendChild(cb);
+      label.appendChild(document.createTextNode(`${slotForSession(s.sessionId) || "?"} ${s.port} (${shortId(s.sessionId)})`));
+      box.appendChild(label);
+    }
+    if (!state.sessions.size) box.appendChild(el("span", "muted small", "暂无会话"));
+  }
+  function renderDebugState() {
+    $("#debug-sub-state").textContent = state.debug.subscribed ? "已订阅" : "未订阅";
+    $("#debug-sub-state").className = "badge " + (state.debug.subscribed ? "active" : "");
+    $("#debug-count").textContent = `${state.debug.frames.length} 帧`;
+    $("#debug-gaps").textContent = `seq 缺口 ${state.debug.gaps}`;
+  }
+  function debugFrameRow(frame) {
+    const tr = document.createElement("tr");
+    tr.appendChild(el("td", "mono", fmtTime(frame.ts)));
+    tr.appendChild(el("td", "mono", `${slotForSession(frame.sessionId) || "?"} ${shortId(frame.sessionId)}`));
+    tr.appendChild(el("td", "", frame.direction === "rx" ? "RX" : "TX"));
+    tr.appendChild(el("td", "mono", frame.seq ?? "-"));
+    tr.appendChild(el("td", "mono", String(frame.size ?? frame.bytes.length)));
+    const td = el("td", "hexcell");
+    const max = 160;
+    td.textContent = `${bytesToHex(frame.bytes.subarray(0, max))}${frame.bytes.length > max ? " …" : ""}`;
+    td.title = bytesToAscii(frame.bytes);
+    tr.appendChild(td);
+    return tr;
+  }
+  function renderDebugFrames() {
+    const body = $("#debug-body");
+    const empty = $("#debug-empty");
+    if (!body) return;
+    body.textContent = "";
+    if (!state.debug.frames.length) empty.classList.remove("hidden"); else empty.classList.add("hidden");
+    const frag = document.createDocumentFragment();
+    for (const f of state.debug.frames.slice(-5000)) frag.appendChild(debugFrameRow(f));
+    body.appendChild(frag);
+    renderDebugState();
+  }
+  function onDebugFrame(data) {
+    const bytes = b64decodeBytes(data.dataB64 || "");
+    const frame = { ts: now(), ...data, bytes };
+    const last = state.debug.lastSeq.get(data.sessionId) || 0;
+    if (data.seq > last + 1) {
+      state.debug.gaps += data.seq - last - 1;
+      logEvent("warn", `调试 seq 缺口: ${shortId(data.sessionId)} ${last} → ${data.seq}`);
+    }
+    if (data.seq) state.debug.lastSeq.set(data.sessionId, data.seq);
+    state.debug.frames.push(frame);
+    $("#debug-empty")?.classList.add("hidden");
+    if (state.debug.frames.length > 5000) state.debug.frames.splice(0, state.debug.frames.length - 5000);
+    if (state.debug.frames.length % 20 === 0) renderDebugFrames();
+    else {
+      const body = $("#debug-body");
+      if (body) { body.appendChild(debugFrameRow(frame)); while (body.childElementCount > 5000) body.firstElementChild?.remove(); }
+      renderDebugState();
+    }
+    const c = state.slots.A?.sessionId === data.sessionId ? state.slots.A : state.slots.B?.sessionId === data.sessionId ? state.slots.B : null;
+    if (c) c._renderMeta();
+  }
+  async function subscribeDebug() {
+    if (!state.mgmt?.open) throw new Error("管理 WS 未连接");
+    const all = $("#debug-all").checked;
+    const ids = all ? "all" : $$("#debug-sessions input[type=checkbox]:checked").map((x) => x.dataset.session);
+    if (!all && !ids.length) throw new Error("请选择至少一个会话，或勾选“全部会话”");
+    await state.mgmt.subscribeDebug(ids, $("#debug-replay").checked);
+    logEvent("ok", `已订阅调试帧: ${all ? "全部" : ids.length + " 个会话"}`);
+  }
+  async function unsubscribeDebug() {
+    await state.mgmt.unsubscribeDebug();
+    logEvent("info", "已取消调试订阅");
+  }
+  function exportDebug() {
+    const lines = state.debug.frames.map((f) => `${fmtTime(f.ts)}\t${f.sessionId}\t${f.direction}\t${f.seq}\t${bytesToHex(f.bytes)}\t${bytesToAscii(f.bytes)}`);
+    download(`ws2s-debug-${Date.now()}.txt`, lines.join("\n"));
+  }
+  async function debugWrite() {
+    const sid = $("#debug-write-session").value;
+    if (!sid) throw new Error("没有可写的会话");
+    const mode = $("#debug-write-mode").value;
+    const text = $("#debug-write-input").value;
+    if (!text.length) throw new Error("请输入内容");
+    const bytes = mode === "hex" ? hexToBytes(text) : textEncoder.encode(text);
+    const r = await state.mgmt.request("session.write", { sessionId: sid, dataB64: b64encodeBytes(bytes) });
+    $("#debug-write-result").textContent = `written=${r.data.written}`;
+    logEvent("ok", `调试写 ${sid.slice(0, 8)} ${r.data.written} 字节`);
+  }
+  function renderDebugWriteOptions() {
+    const sel = $("#debug-write-session");
+    if (!sel) return;
+    const prev = sel.value;
+    sel.textContent = "";
+    for (const s of state.sessions.values()) {
+      const opt = el("option", "", `${slotForSession(s.sessionId) || "?"} ${s.port} (${shortId(s.sessionId)})`);
+      opt.value = s.sessionId;
+      sel.appendChild(opt);
+    }
+    if (prev && [...sel.options].some((o) => o.value === prev)) sel.value = prev;
+  }
+
+  // ----------------------------- events from management -----------------------------
+  function onEvent(event, data) {
+    if (event === "hello") { /* handled in onHello */ return; }
+    if (event === "session.state") {
+      const prev = state.sessions.get(data.sessionId) || {};
+      const next = { ...prev, ...data };
+      state.sessions.set(data.sessionId, next);
+      const c = state.slots.A?.sessionId === data.sessionId ? state.slots.A : state.slots.B?.sessionId === data.sessionId ? state.slots.B : null;
+      if (c) c.updateInfo(next);
+      if (data.state === "closed") {
+        state.closedCodes.set(data.sessionId, data.closeCode);
+        logEvent("warn", `会话关闭 ${shortId(data.sessionId)} ${data.reason || ""} code=${data.closeCode ?? "-"}`);
+        state.sessions.delete(data.sessionId);
+        renderSessions();
+      } else {
+        logEvent("event", { event, data });
+        renderSessions();
+      }
+      renderTerminalMeta();
+      renderDebugOptions();
+      renderDebugWriteOptions();
+      return;
+    }
+    if (event === "ports.changed") {
+      logEvent("event", { event, data });
+      void refreshPorts().catch(() => {});
+      return;
+    }
+    if (event === "debug.frame") { onDebugFrame(data); return; }
+    if (event === "admin.state") {
+      state.adminEnabled = !!data.enabled;
+      renderAdmin();
+      logEvent("event", { event, data });
+      return;
+    }
+    logEvent("event", { event, data });
+  }
+
+  // ----------------------------- admin toggle -----------------------------
+  async function toggleAdmin() {
+    if (!state.mgmt?.open) throw new Error("管理 WS 未连接");
+    const wish = !state.adminEnabled;
+    if (!wish && !confirm("关闭后 8766 的 HTTP 管理页将不可访问；管理 WS 仍可用。继续？")) return;
+    const r = await state.mgmt.request("admin.set", { enabled: wish });
+    state.adminEnabled = !!r.data.enabled;
+    renderAdmin();
+    logEvent("ok", `管理页已${state.adminEnabled ? "开启" : "关闭"}`);
+  }
+
+  // ----------------------------- edge tests -----------------------------
+  function requireA() {
+    const a = state.slots.A;
+    if (!a) throw new Error("请先在“会话”页打开 A");
+    return a;
+  }
+  function waitClose(ws, timeout = 4000) {
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (code) => { if (done) return; done = true; clearTimeout(t); resolve(code); };
+      const t = setTimeout(() => { try { ws.close(); } catch {} finish(-1); }, timeout);
+      ws.onclose = (ev) => finish(ev.code);
+      ws.onerror = () => {};
+    });
+  }
+  async function edgeSecondClient() {
+    const a = requireA();
+    if (a.state !== "active") throw new Error("A 必须是 active 才能验证第二客户端 4002");
+    if (!a.dataUrl) throw new Error("A 没有数据 URL");
+    const ws = new WebSocket(a.dataUrl);
+    ws.binaryType = "arraybuffer";
+    const code = await waitClose(ws, 4000);
+    edgeLog(`第二数据客户端 close code=${code}（期望 4002）`);
+    logEvent(code === 4002 ? "ok" : "warn", `第二数据客户端 close=${code}`);
+  }
+  async function edgeActiveOpen() {
+    const a = requireA();
+    if (a.state !== "active") throw new Error("A 必须是 active 才能验证 PORT_BUSY");
+    try {
+      await state.mgmt.request("session.open", a.params);
+      edgeLog("重复 open 意外成功");
+    } catch (e) {
+      edgeLog(`重复 open 被拒绝: ${e.message}（期望 PORT_BUSY）`);
+      logEvent("ok", "active 重复 open 被拒绝");
+    }
+  }
+  async function edgeBadToken() {
+    const a = requireA();
+    if (a.state !== "active") throw new Error("A 必须是 active 才能验证 token");
+    const base = a.dataUrl.split("/").slice(0, -1).join("/");
+    const ws = new WebSocket(`${base}/bad-token-${Date.now()}`);
+    ws.binaryType = "arraybuffer";
+    const code = await waitClose(ws, 4000);
+    edgeLog(`错误 token 连接结束 code=${code}（浏览器不暴露 HTTP 404，只看到握手失败/1006）`);
+  }
+  async function edgeMissingPort() {
+    const base = state.ports[0]?.path || "serial";
+    const path = `${base}__missing__`;
+    try {
+      await state.mgmt.request("session.open", { ...readOpenParams(path), path });
+      edgeLog("不存在串口意外打开成功");
+    } catch (e) {
+      edgeLog(`不存在串口被拒绝: ${e.message}（期望 PORT_NOT_FOUND）`);
+    }
+  }
+  async function edgeWriteInactive() {
+    const used = new Set(Array.from(state.sessions.values(), (s) => s.port));
+    const free = state.ports.find((p) => !used.has(p.path));
+    let sid = null;
+    let restoreA = false;
+    if (free) {
+      const r = await state.mgmt.request("session.open", readOpenParams(free.path));
+      sid = r.data.sessionId;
+    } else {
+      // 只有两个串口且 A/B 都占用时：临时关闭 A，借用它的端口开一个 awaiting 会话。
+      const a = requireA();
+      const path = a.params.path;
+      await closeSlot("A");
+      restoreA = true;
+      edgeLog(`没有空闲串口，临时借用 A (${path}) 测试，完成后自动恢复`);
+      const r = await state.mgmt.request("session.open", readOpenParams(path));
+      sid = r.data.sessionId;
+    }
+    try {
+      await state.mgmt.request("session.write", { sessionId: sid, dataB64: btoa("x") });
+      edgeLog("非 active 写意外成功");
+    } catch (e) {
+      edgeLog(`非 active 写被拒绝: ${e.message}（期望 SESSION_STATE）`);
+    } finally {
+      await state.mgmt.request("session.close", { sessionId: sid }).catch(() => {});
+      if (restoreA) {
+        try { await openSlot("A"); edgeLog("A 已恢复"); }
+        catch (e) { edgeLog(`A 恢复失败: ${e.message}`); }
+      }
+    }
+  }
+  async function edgeUnknownAction() {
+    try {
+      await state.mgmt.request("no.such.action", {});
+      edgeLog("未知 action 意外成功");
+    } catch (e) {
+      edgeLog(`未知 action: ${e.message}（期望 UNKNOWN_ACTION）`);
+    }
+  }
+  async function edgeTextFrame() {
+    const a = requireA();
+    if (!a.ws || a.ws.readyState !== WebSocket.OPEN) throw new Error("A 数据 WS 未连接");
+    if (!confirm("会向 A 发送文本帧，服务端将以 1003 关闭数据 WS，会话进入 grace。继续？")) return;
+    a.ws.send("this-is-a-text-frame");
+    edgeLog("已发送文本帧，等待 1003...");
+    await sleep(400);
+    edgeLog(`A 状态=${a.state} close=${a.closeCode ?? "-"}`);
+  }
+  async function edgeOversize() {
+    const a = requireA();
+    if (!a.ws || a.ws.readyState !== WebSocket.OPEN) throw new Error("A 数据 WS 未连接");
+    if (!confirm("会向 A 发送 1MiB+1 字节，服务端将以 1009 关闭数据 WS，会话进入 grace。继续？")) return;
+    a.ws.send(new Uint8Array(1024 * 1024 + 1));
+    edgeLog("已发送 1MiB+1，等待 1009...");
+    await sleep(500);
+    edgeLog(`A 状态=${a.state} close=${a.closeCode ?? "-"}`);
+  }
+  async function edgeAbnormal() {
+    const a = requireA();
+    if (a.state !== "active") throw new Error("A 必须是 active 才能模拟异常断开");
+    a.disconnectAbnormal();
+    edgeLog("已发送 close 3001（浏览器不允许发 1001），等待 session.state=grace...");
+    await sleep(400);
+    edgeLog(`A 状态=${a.state}`);
+  }
+  async function edgeNormalClose() {
+    const a = state.slots.A;
+    if (!a) throw new Error("A 未打开");
+    await closeSlot("A", true);
+    edgeLog("A 已正常关闭 1000，端口应已释放");
+  }
+
+  // ----------------------------- runner -----------------------------
+  function runnerSteps() {
+    return [
+      ["connect", "连接管理 WS"],
+      ["ports", "扫描端口"],
+      ["select", "选择 A/B 两个不同串口"],
+      ["open", "打开 A/B 串口"],
+      ["data", "连接 A/B 数据 WS"],
+      ["ab", "A → B 4KB 回环"],
+      ["ba", "B → A 4KB 回环"],
+      ["counters", "读取会话计数"],
+      ["debug", "订阅调试帧并验证"],
+      ["debug-write", "调试写并验证 B 收到"],
+      ["second", "第二数据客户端 4002"],
+      ["busy", "active 重复 open PORT_BUSY"],
+      ["normal", "正常关闭 A / 重新打开"],
+      ["grace", "异常断开 B / 宽限重连"],
+      ["admin", "管理页关闭 / 恢复"],
+      ["autostart", "开机自启状态（只读）"],
+      ["cleanup", "清理会话 / 恢复管理页"],
+    ];
+  }
+  function renderRunner() {
+    const box = $("#runner-steps");
+    if (!box) return;
+    box.textContent = "";
+    for (const s of state.runner.steps) {
+      const li = document.createElement("li");
+      li.dataset.id = s.id;
+      const st = el("span", "st " + s.status, s.status === "pass" ? "✓" : s.status === "fail" ? "✗" : s.status === "running" ? "…" : s.status === "skip" ? "−" : "·");
+      li.appendChild(st);
+      li.appendChild(el("span", "", s.label));
+      li.appendChild(el("span", "detail", s.detail || ""));
+      box.appendChild(li);
+    }
+    const pass = state.runner.steps.filter((s) => s.status === "pass").length;
+    const fail = state.runner.steps.filter((s) => s.status === "fail").length;
+    $("#runner-count").textContent = `${pass} / ${state.runner.steps.length}${fail ? ` · ${fail} FAIL` : ""}`;
+    $("#runner-status").textContent = state.runner.running ? "运行中" : fail ? "有失败" : pass === state.runner.steps.length ? "全部通过" : "未运行";
+    $("#runner-status").className = "badge " + (fail ? "error" : pass === state.runner.steps.length ? "active" : "");
+  }
+  function runnerSet(id, status, detail = "") {
+    const s = state.runner.steps.find((x) => x.id === id);
+    if (!s) return;
+    s.status = status;
+    s.detail = detail;
+    renderRunner();
+  }
+  async function waitSessionState(sessionId, want, timeout = 6000) {
+    const end = now() + timeout;
+    while (now() < end) {
+      if (want === "gone") {
+        if (!state.sessions.has(sessionId)) return;
+      } else {
+        const s = state.sessions.get(sessionId);
+        if (s?.state === want) return;
+      }
+      await sleep(100);
+      try { await refreshSessions(); } catch {}
+    }
+    throw new Error(`等待会话 ${shortId(sessionId)} 状态 ${want} 超时`);
+  }
+  async function runDemo() {
+    if (state.runner.running) return;
+    state.runner.running = true;
+    state.runner.steps = runnerSteps().map(([id, label]) => ({ id, label, status: "pending", detail: "" }));
+    renderRunner();
+    const mark = (id, status, detail) => runnerSet(id, status, detail);
+    let a = null, b = null;
+    try {
+      mark("connect", "running");
+      await ensureMgmt();
+      mark("connect", "pass", `127.0.0.1:${state.mgmtPort}`);
+
+      mark("ports", "running");
+      const ports = await refreshPorts();
+      mark("ports", "pass", `${ports.length} 个串口`);
+
+      mark("select", "running");
+      let aPath = $("#path-A").value.trim();
+      let bPath = $("#path-B").value.trim();
+      if (!aPath || !ports.some((p) => p.path === aPath)) aPath = ports[0]?.path;
+      if (!bPath || !ports.some((p) => p.path === bPath) || bPath === aPath) bPath = ports.find((p) => p.path !== aPath)?.path;
+      if (!aPath || !bPath) throw new Error("需要至少两个不同的串口");
+      $("#path-A").value = aPath; $("#path-B").value = bPath;
+      mark("select", "pass", `${aPath} ↔ ${bPath}`);
+
+      await closeSlot("A"); await closeSlot("B");
+
+      mark("open", "running");
+      a = await openSlot("A");
+      b = await openSlot("B");
+      mark("open", "pass", "A/B 已打开");
+
+      mark("data", "running");
+      if (a.state !== "active" || b.state !== "active") throw new Error("A/B 数据 WS 未 active");
+      mark("data", "pass");
+
+      mark("ab", "running");
+      a.clearBuffer(); b.clearBuffer();
+      const p1 = pattern(4096);
+      a.sendBytes(p1);
+      const gotB = await b.takeBytes(p1.length, 6000);
+      if (!bytesEqual(gotB, p1)) throw new Error(`A→B 内容不一致（${gotB.length}/${p1.length}）`);
+      mark("ab", "pass", "4096 B 一致");
+
+      mark("ba", "running");
+      const p2 = pattern(4096);
+      b.clearBuffer(); a.clearBuffer();
+      b.sendBytes(p2);
+      const gotA = await a.takeBytes(p2.length, 6000);
+      if (!bytesEqual(gotA, p2)) throw new Error(`B→A 内容不一致（${gotA.length}/${p2.length}）`);
+      mark("ba", "pass", "4096 B 一致");
+
+      mark("counters", "running");
+      await refreshSessions();
+      const sa = state.sessions.get(a.sessionId);
+      const sb = state.sessions.get(b.sessionId);
+      if (!sa || !sb) throw new Error("刷新后找不到 A/B 会话");
+      mark("counters", "pass", `A RX ${sa.counters.rxBytes}/TX ${sa.counters.txBytes}; B RX ${sb.counters.rxBytes}/TX ${sb.counters.txBytes}`);
+
+      mark("debug", "running");
+      await state.mgmt.subscribeDebug("all", true);
+      state.debug.frames.length = 0; state.debug.gaps = 0; state.debug.lastSeq.clear(); renderDebugFrames();
+      const dbgBefore = state.debug.frames.length;
+      a.clearBuffer(); b.clearBuffer();
+      a.sendBytes(textEncoder.encode("DBG"));
+      await b.takeBytes(3, 4000);
+      await sleep(250);
+      if (state.debug.frames.length <= dbgBefore) throw new Error("未收到 debug.frame");
+      mark("debug", "pass", `${state.debug.frames.length} 帧`);
+
+      mark("debug-write", "running");
+      a.clearBuffer(); b.clearBuffer();
+      const w = await state.mgmt.request("session.write", { sessionId: a.sessionId, dataB64: b64encodeBytes(textEncoder.encode("MGT")) });
+      const gotM = await b.takeBytes(3, 4000);
+      if (!bytesEqual(gotM, textEncoder.encode("MGT"))) throw new Error("B 未收到调试写内容");
+      mark("debug-write", "pass", `written=${w.data.written}`);
+
+      mark("second", "running");
+      const ws2 = new WebSocket(a.dataUrl);
+      ws2.binaryType = "arraybuffer";
+      const code2 = await waitClose(ws2, 4000);
+      if (code2 !== 4002) throw new Error(`第二客户端 close=${code2}，期望 4002`);
+      mark("second", "pass", "4002");
+
+      mark("busy", "running");
+      try { await state.mgmt.request("session.open", a.params); throw new Error("重复 open 未被拒绝"); }
+      catch (e) { if (!String(e.message).includes("PORT_BUSY")) throw e; }
+      mark("busy", "pass", "PORT_BUSY");
+
+      mark("normal", "running");
+      const oldAId = a.sessionId;
+      await closeSlot("A", true);
+      await waitSessionState(oldAId, "gone", 5000);
+      a = await openSlot("A");
+      mark("normal", "pass", "关闭 1000 + 重新打开");
+
+      mark("grace", "running");
+      b.disconnectAbnormal(3001);
+      await waitSessionState(b.sessionId, "grace", 5000);
+      await b.reconnectOld();
+      await waitSessionState(b.sessionId, "active", 5000);
+      mark("grace", "pass", "3001 → grace → active");
+
+      mark("admin", "running");
+      await state.mgmt.request("admin.set", { enabled: false });
+      await sleep(200);
+      await state.mgmt.request("admin.set", { enabled: true });
+      await sleep(200);
+      mark("admin", "pass", "关闭 → 恢复");
+
+      mark("autostart", "pass", `当前 ${state.autostart ? "开启" : "关闭"}（只读）`);
+      mark("cleanup", "running");
+    } catch (e) {
+      const running = state.runner.steps.find((s) => s.status === "running");
+      if (running) mark(running.id, "fail", e.message);
+      for (const s of state.runner.steps) if (s.status === "pending") s.status = "skip";
+      logEvent("error", "一键演示: " + e.message);
+    } finally {
+      try {
+        await closeSlot("A"); await closeSlot("B");
+        await state.mgmt?.request("admin.set", { enabled: true }).catch(() => {});
+        if (state.debug.subscribed) await state.mgmt?.unsubscribeDebug().catch(() => {});
+        await refreshSessions();
+        mark("cleanup", "pass", "会话已清理，管理页已恢复");
+      } catch (e) {
+        mark("cleanup", "fail", e.message);
+      }
+      state.runner.running = false;
+      renderRunner();
+      logEvent("info", "一键演示结束");
+    }
+  }
+
+  // ----------------------------- management UI init -----------------------------
+  async function ensureMgmt() {
+    const port = Number($("#mgmt-port").value);
+    if (!Number.isInteger(port) || port <= 0 || port > 65535) throw new Error("管理端口无效");
+    if (state.mgmt && state.mgmt.port === port && state.mgmt.open && state.mgmt.hello) return state.mgmt;
+    if (state.mgmt) state.mgmt.close();
+    state.mgmtPort = port;
+    state.mgmt = new ManagementClient(port, { onHello, onEvent });
+    $("#mgmt-url").textContent = `ws://127.0.0.1:${port}/ws`;
+    const hello = await state.mgmt.connect();
+    await alignAfterHello();
+    return state.mgmt;
+  }
+  async function disconnectMgmt() {
+    state.mgmt?.close();
+    state.mgmt = null;
+    state.hello = null;
+    state.adminEnabled = null;
+    renderAdmin();
+  }
+
+  // ----------------------------- bind UI -----------------------------
+  function bindUI() {
+    $$(".tabs button").forEach((btn) => btn.addEventListener("click", () => switchTab(btn.dataset.tab)));
+    $("#btn-connect").addEventListener("click", async () => {
+      try { await ensureMgmt(); toast("管理 WS 已连接", "ok"); }
+      catch (e) { logEvent("error", "连接失败: " + e.message); }
+    });
+    $("#btn-reconnect").addEventListener("click", async () => {
+      try {
+        if (!state.mgmt) await ensureMgmt();
+        else { await state.mgmt.reconnect(); await alignAfterHello(); }
+        toast("管理 WS 已重连", "ok");
+      } catch (e) { logEvent("error", "重连失败: " + e.message); }
+    });
+    $("#btn-refresh-all").addEventListener("click", async () => { try { await refreshPorts(); await refreshSessions(); } catch (e) { logEvent("error", e.message); } });
+    $("#btn-refresh-ports").addEventListener("click", async () => { try { await refreshPorts(); } catch (e) { logEvent("error", e.message); } });
+    $("#btn-admin-toggle").addEventListener("click", () => toggleAdmin().catch((e) => logEvent("error", e.message)));
+    $("#link-admin").addEventListener("click", (e) => { if (!state.adminEnabled || !state.hello?.admin?.url) e.preventDefault(); });
+    $("#btn-open-a").addEventListener("click", () => openSlot("A").catch((e) => { $("#open-result").textContent = e.message; logEvent("error", e.message); }));
+    $("#btn-open-b").addEventListener("click", () => openSlot("B").catch((e) => { $("#open-result").textContent = e.message; logEvent("error", e.message); }));
+    $("#btn-close-a").addEventListener("click", () => closeSlot("A").catch((e) => logEvent("error", e.message)));
+    $("#btn-close-b").addEventListener("click", () => closeSlot("B").catch((e) => logEvent("error", e.message)));
+    $("#auto-reconnect").addEventListener("change", () => {
+      state.autoReconnect = $("#auto-reconnect").checked;
+      for (const s of ["A", "B"]) if (state.slots[s]) state.slots[s].autoReconnect = state.autoReconnect;
+    });
+    for (const slot of ["A", "B"]) {
+      bindTerminalPrefs(slot);
+      $("#sendbtn-" + slot).addEventListener("click", () => sendFromSlot(slot));
+      $("#send-" + slot).addEventListener("keydown", (e) => { if (e.key === "Enter") sendFromSlot(slot); });
+    }
+    $$("[data-term]").forEach((btn) => btn.addEventListener("click", async () => {
+      const slot = btn.dataset.slot;
+      const c = state.slots[slot];
+      try {
+        if (!c) throw new Error(`${slot} 未打开`);
+        if (btn.dataset.term === "clear") { c.frames = []; c.frameBytes = 0; renderTerminalLog(slot); }
+        else if (btn.dataset.term === "export") exportTerminal(slot);
+        else if (btn.dataset.term === "reconnect") { await c.reconnectOld(); toast(`${slot} 重连成功`, "ok"); }
+        else if (btn.dataset.term === "abnormal") { c.disconnectAbnormal(); toast(`${slot} 已模拟异常断开，等待 grace`, "warn"); }
+        else if (btn.dataset.term === "close") { await closeSlot(slot, true); }
+      } catch (e) { logEvent("error", `${slot}: ${e.message}`); }
+    }));
+    $("#btn-loop-ab").addEventListener("click", () => loopback("A", "B").catch((e) => { $("#loop-result").textContent = e.message; logEvent("error", e.message); }));
+    $("#btn-loop-ba").addEventListener("click", () => loopback("B", "A").catch((e) => { $("#loop-result").textContent = e.message; logEvent("error", e.message); }));
+    $("#debug-all").addEventListener("change", () => {
+      state.debug.all = $("#debug-all").checked;
+      renderDebugOptions();
+    });
+    $("#btn-debug-subscribe").addEventListener("click", () => subscribeDebug().catch((e) => logEvent("error", e.message)));
+    $("#btn-debug-unsubscribe").addEventListener("click", () => unsubscribeDebug().catch((e) => logEvent("error", e.message)));
+    $("#btn-debug-export").addEventListener("click", exportDebug);
+    $("#btn-debug-clear").addEventListener("click", () => { state.debug.frames.length = 0; state.debug.gaps = 0; state.debug.lastSeq.clear(); renderDebugFrames(); });
+    $("#btn-debug-write").addEventListener("click", () => debugWrite().catch((e) => { $("#debug-write-result").textContent = e.message; logEvent("error", e.message); }));
+    $$("[data-edge]").forEach((btn) => btn.addEventListener("click", () => {
+      const handlers = {
+        "second-client": edgeSecondClient,
+        "active-open": edgeActiveOpen,
+        "bad-token": edgeBadToken,
+        "missing-port": edgeMissingPort,
+        "write-inactive": edgeWriteInactive,
+        "unknown-action": edgeUnknownAction,
+        "text-frame": edgeTextFrame,
+        "oversize": edgeOversize,
+        "abnormal": edgeAbnormal,
+        "normal-close": edgeNormalClose,
+      };
+      const fn = handlers[btn.dataset.edge];
+      if (fn) Promise.resolve().then(fn).catch((e) => edgeLog(`失败: ${e.message}`));
+    }));
+    $("#btn-run-demo").addEventListener("click", runDemo);
+    $("#event-filter").addEventListener("input", renderEvents);
+    $("#btn-event-clear").addEventListener("click", () => { state.events.length = 0; renderEvents(); });
+    $("#btn-event-export").addEventListener("click", () => download(`ws2s-events-${Date.now()}.json`, JSON.stringify(state.events, null, 2), "application/json"));
+    $("#mgmt-port").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#btn-connect").click(); });
+  }
+  function switchTab(name) {
+    $$(".tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
+    $$(".tab-panel").forEach((p) => p.classList.toggle("active", p.id === "tab-" + name));
+    if (name === "terminal") renderTerminal();
+    if (name === "debug") { renderDebugOptions(); renderDebugFrames(); }
+    if (name === "sessions") renderSessions();
+  }
+  function renderOrigin() {
+    const origin = location.origin;
+    $("#page-origin").textContent = origin;
+    $("#footer-origin").textContent = origin;
+    const isFile = location.protocol === "file:";
+    const isLoopback = ["127.0.0.1", "localhost", "[::1]"].includes(location.hostname);
+    if (isFile) {
+      $("#banner").textContent = "不要用 file:// 打开：浏览器会发送 Origin: null，桥接默认拒绝。请在项目目录运行 python -m http.server 8080 --bind 127.0.0.1，然后访问 http://127.0.0.1:8080/demo/websocket2serial-demo.html。";
+      $("#banner").classList.remove("hidden");
+      $("#btn-connect").disabled = true;
+      $("#btn-reconnect").disabled = true;
+    } else if (!isLoopback) {
+      $("#banner").textContent = "当前页面不是从 127.0.0.1/localhost 打开的；桥接只监听本机回环，请用 http://127.0.0.1:8080/ 打开。";
+      $("#banner").classList.remove("hidden");
+    }
+  }
+  async function poll() {
+    if (!state.mgmt?.open || state.pollBusy) return;
+    state.pollBusy = true;
+    try {
+      await refreshSessions();
+    } catch { /* ignore poll errors */ }
+    finally { state.pollBusy = false; }
+  }
+  function init() {
+    renderOrigin();
+    bindUI();
+    state.runner.steps = runnerSteps().map(([id, label]) => ({ id, label, status: "pending", detail: "" }));
+    renderRunner();
+    renderAdmin();
+    renderTerminal();
+    renderDebugOptions();
+    renderDebugFrames();
+    for (const slot of ["A", "B"]) {
+      const a = $("#autoscroll-" + slot), h = $("#hex-" + slot), t = $("#ts-" + slot), p = $("#paused-" + slot);
+      state.terminalPrefs[slot].autoscroll = a.checked;
+      state.terminalPrefs[slot].hex = h.checked;
+      state.terminalPrefs[slot].ts = t.checked;
+      state.terminalPrefs[slot].paused = p.checked;
+    }
+    const meta = () => { for (const slot of ["A", "B"]) state.slots[slot]?._renderMeta(); };
+    setInterval(meta, 500);
+    setInterval(poll, 1500);
+    if (location.protocol !== "file:" && ["127.0.0.1", "localhost", "[::1]"].includes(location.hostname)) {
+      ensureMgmt().catch((e) => logEvent("error", "自动连接管理 WS 失败: " + e.message));
+    }
+  }
+
+  document.addEventListener("DOMContentLoaded", init);
+})();
+</script>
+</body>
+</html>
