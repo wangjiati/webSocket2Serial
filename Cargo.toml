@@ -1,0 +1,83 @@
+[package]
+name = "websocket2serial"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77"
+description = "WebSocket↔串口 本机常驻透传工具"
+publish = false
+
+# 依赖版本按实现计划 + M0 可行性验证锁定，保证 MSRV = 1.77.2（Windows 7 SP1 / Ubuntu 18.04）。
+# 关键锁定：
+# - tokio 用 "=1.38.0"（计划指定 1.38；1.54.x 起 MSRV 升至 1.85）。
+# - hyper-util 0.1.21 起使用 edition 2024（要求 Cargo >= 1.85），固定 0.1.20。
+# - 其余依赖均选 rust_version <= 1.77 的版本。
+
+[dependencies]
+tokio = { version = "=1.38.0", features = [
+    "rt-multi-thread",
+    "macros",
+    "signal",
+    "net",
+    "time",
+    "sync",
+    "io-util",
+    "fs",
+] }
+axum = { version = "0.7", features = ["ws"] }
+serialport = "4.5"
+hyper-util = "=0.1.20"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "=0.8.19"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt"] }
+tracing-appender = "0.2"
+base64 = "0.22"
+thiserror = "1"
+uuid = { version = "=1.11.0", features = ["v4"] }
+futures-util = "0.3"
+dirs = "5"
+open = "5"
+# clap 较新的 4.5.x 把 clap_lex 抬到 1.1.1（edition 2024）。固定到早期 4.5.x，
+# 其 clap_lex 仍为 edition 2021 的 0.7 系列。
+clap = { version = "=4.5.4", features = ["derive"] }
+
+# MSRV 锁定：tracing-appender 依赖的 `time` 0.3.x 较新版本把 `time-core` 抬到
+# 0.1.9（edition 2024，要求 Cargo >= 1.85）。固定 `time` 到仍为 edition 2021 的版本。
+# `time` 依赖的 `powerfmt` 0.2.1 起要求 rustc 1.79，一并固定。
+time = "=0.3.36"
+powerfmt = "=0.2.0"
+
+# MSRV 锁定：toml -> toml_edit -> indexmap -> hashbrown 链，较新版本解析到
+# hashbrown 0.17（edition 2024）。固定 toml_edit 与 indexmap 到仍为 edition 2021 的版本。
+toml_edit = "=0.22.20"
+indexmap = "=2.2.6"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
+windows-sys = { version = "0.52", features = [
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Shell",
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+] }
+
+[target.'cfg(unix)'.dependencies]
+fs2 = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
+# MSRV 锁定：tempfile 传递依赖的 fastrand 较新版本用 getrandom 0.4（edition 2024）。
+# 固定 fastrand 到仍用 getrandom 0.2 的版本。
+fastrand = "=2.1.0"
+# MSRV 锁定：reqwest 传递依赖的 encoding_rs 较新版本（0.8.42）用 edition 2024。
+encoding_rs = "=0.8.34"
+# MSRV 锁定：reqwest/tokio-tungstenite 传递依赖的 `url` 较新版本使用 idna 1.x
+# （ICU4X，icu_collections 2.4.0 起 edition 2024）。固定 url 到仍用 idna 0.5 的版本。
+url = "=2.5.0"
+tokio-tungstenite = { version = "0.21", default-features = false, features = [
+    "connect",
+    "handshake",
+] }
+reqwest = { version = "0.11", default-features = false, features = ["json"] }
