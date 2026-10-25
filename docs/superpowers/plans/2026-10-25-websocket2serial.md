@@ -175,13 +175,13 @@ cargo +1.77.2 build --release --manifest-path spike/Cargo.toml --target x86_64-p
 
 在 `ubuntu:18.04` 容器安装 `build-essential pkg-config libudev-dev socat`，用 1.77.2 构建并运行同一 spike，确认串口（PTY）与 WS 回显可用。
 
-- [ ] **步骤 6：测 115200 内部延迟**
+- [ ] **步骤 6：记录延迟测量方案（不在 spike 内测）**
 
-用 TX-RX 回环，在 spike 内记录“串口 read 返回 → WS send”和“WS 收到 → 串口 write 返回”的时间差；跑 5 分钟，记录 p50/p99。921600 视硬件条件选做。
+M0 spike 没有内置计时仪器，不产出延迟数据。记录测量方案：真实实现（任务 7）必须在“串口 read 返回 → WS send”和“WS 收到 → 串口 write 返回”两处埋点；M2/M4 用 TX-RX 回环跑 5 分钟，记录 p50/p99。921600 视硬件条件选做。
 
 - [ ] **步骤 7：记录结论**
 
-在 `docs/notes/m0-results.md` 写清：Rust 1.77.2 是否可用、静态 CRT 是否可运行、托盘方案、写超时方案、127.0.0.1/localhost 结论、115200 延迟。若任一项失败，在此任务内决定备选（nightly win7 target / Go 1.20 / 无托盘降级）并停止后续任务。
+在 `docs/notes/m0-results.md` 写清：Rust 1.77.2 是否可用、静态 CRT 是否可运行、托盘方案、写超时方案、127.0.0.1/localhost 结论、延迟测量方案与缺口。若任一项失败，在此任务内决定备选（nightly win7 target / Go 1.20 / 无托盘降级）并停止后续任务。
 
 - [ ] **步骤 8：提交**
 
@@ -718,8 +718,9 @@ async fn rx_backpressure_closes_4005() {
 
 `Session::attach` 首次进入 `active` 时启动两个阻塞线程（共享 `Arc<Mutex<Box<dyn SerialTransport>>>`）：
 
-- 读线程：5ms 超时循环；`active` 时把最多 4096 字节 `try_send` 到容量 `rx_queue_bytes/4096` 的通道，满则 `close(Backpressure, 4005)`；`grace` 时只 `record_rx(discarded)`；`DeviceLost` → 4001，其他 I/O → 4007。
-- 写线程：从容量 1 的 tokio mpsc 取 `Vec<u8>`；按约 100ms 线路时间分块（`clamp(baud/100, 256, 4096)`），每块用 `write_timeout_ms` 写；`WriteTimeout` → 4007，`DeviceLost` → 4001；成功 `record_tx`。
+- 读线程：5ms 超时循环；`active` 时把最多 4096 字节 `try_send` 到容量 `rx_queue_bytes/4096` 的通道，满则 `close(Backpressure, 4005)`；`grace` 时只 `record_rx(discarded)`；`DeviceLost` → 4001，其他 I/O → 4007。在 read 返回到 try_send 之前记录 `elapsed_us` 的 `tracing::debug!`。
+- 写线程：从容量 1 的 tokio mpsc 取 `Vec<u8>`；按约 100ms 线路时间分块（`clamp(baud/100, 256, 4096)`），每块用 `write_timeout_ms` 写；`WriteTimeout` → 4007，`DeviceLost` → 4001；成功 `record_tx`。在 recv 到 write 返回后记录 `elapsed_us` 的 `tracing::debug!`。
+- 这两处 `elapsed_us` 只用于 M2/M4 统计工具内部 p50/p99，不扩展管理协议；M4 用日志汇总。
 
 `Session` 持有 `Mutex<Option<mpsc::Receiver<Vec<u8>>>>`；数据 WS 在 attach 时 `take`，进入 grace 时归还，重连时再取。读线程在 grace 阶段丢弃，不向通道写入，避免队列被填满。数据断开：close 1000 → `close(ClientClosed)`；其他 → `enter_grace()` 并启动 10s 定时器（任务 6 已有定时器模式，复用）。重连成功 → `resume()`，写入 `lastGap { discardedBytes, durationMs, resumed:true }`。关闭时先置 shutdown、drop tx 发送端、join 线程（带 1s 超时），再释放串口。
 
@@ -1363,7 +1364,7 @@ fn install_script_mentions_desktop_and_binary() {
 
 - [ ] **步骤 5：现场验收**
 
-Win7 SP1 x64 与 Ubuntu 18.04：解压/安装、自启、自动登录重启、管理页（Chrome 109/Firefox 115 ESR）、串口拔插、页面刷新 50 次、断线重连 50 次、8 小时浸泡、115200 计数一致；921600 与 Ubuntu 托盘按条件选做。结果写入 `m4-results.md`，失败项建 issue 并回到对应任务修复。
+Win7 SP1 x64 与 Ubuntu 18.04：解压/安装、自启、自动登录重启、管理页（Chrome 109/Firefox 115 ESR）、串口拔插、页面刷新 50 次、断线重连 50 次、8 小时浸泡、115200 计数一致；用任务 7 的 `elapsed_us` 日志汇总工具内部延迟 p50/p99；921600 与 Ubuntu 托盘按条件选做。结果写入 `m4-results.md`，失败项建 issue 并回到对应任务修复。
 
 - [ ] **步骤 6：提交**
 
