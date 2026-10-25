@@ -18,6 +18,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
+use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
 
 use crate::config::OriginAllowlist;
@@ -164,12 +165,13 @@ async fn run_data_loop(
     let tx = attached.tx;
     let mut close_watch = state.session.close_subscribe();
 
-    // attach 与建 watch 之间会话可能已关闭：先读当前值。
-    let reason = *close_watch.borrow();
-    if let Some(reason) = reason {
-        if let Some(code) = reason.close_code() {
-            let _ = socket.send(close_message(code)).await;
-        }
+    // attach 与建 watch 之间会话可能已关闭：先读当前值补发 close code。
+    if let Some(code) = state
+        .session
+        .close_reason()
+        .and_then(CloseReason::close_code)
+    {
+        let _ = socket.send(close_message(code)).await;
         return;
     }
 
@@ -186,9 +188,19 @@ async fn run_data_loop(
                             let _ = manager.enter_grace(&session_id).await;
                             return;
                         }
-                        // 容量 1 的 tx 通道：send 阻塞即自然背压，不丢数据。
-                        if tx.send(data).await.is_err() {
-                            return;
+                        // 容量 1 的 tx 通道：send 阻塞即自然背压；期间仍轮询 close watch，
+                        // 避免写停滞/掉线/背压触发会话关闭时 close code 不送达。
+                        tokio::select! {
+                            res = tx.send(data) => {
+                                if res.is_err() {
+                                    send_session_close(&mut sender, &state.session).await;
+                                    return;
+                                }
+                            }
+                            _ = close_watch.changed() => {
+                                send_session_close(&mut sender, &state.session).await;
+                                return;
+                            }
                         }
                     }
                     Some(Ok(Message::Text(_))) => {
@@ -224,30 +236,44 @@ async fn run_data_loop(
             outgoing = rx.recv() => {
                 match outgoing {
                     Some(bytes) => {
-                        if sender.send(Message::Binary(bytes)).await.is_err() {
-                            state.session.return_rx(rx);
-                            let _ = manager.enter_grace(&session_id).await;
-                            return;
+                        // 客户端慢收时仍轮询 close watch，避免 close code 延迟。
+                        tokio::select! {
+                            res = sender.send(Message::Binary(bytes)) => {
+                                if res.is_err() {
+                                    state.session.return_rx(rx);
+                                    let _ = manager.enter_grace(&session_id).await;
+                                    return;
+                                }
+                            }
+                            _ = close_watch.changed() => {
+                                send_session_close(&mut sender, &state.session).await;
+                                return;
+                            }
                         }
                     }
-                    None => return,
-                }
-            }
-            changed = close_watch.changed() => {
-                // 会话因设备掉线/写停滞/背压/管理关闭而关闭：发对应 close code 后退出。
-                if changed.is_err() {
-                    return;
-                }
-                let reason = *close_watch.borrow();
-                if let Some(reason) = reason {
-                    if let Some(code) = reason.close_code() {
-                        let _ = sender.send(close_message(code)).await;
+                    None => {
+                        // 串口→客户端通道关闭（会话已关、IO 拆除）：补发 close code，不静默 EOF。
+                        send_session_close(&mut sender, &state.session).await;
+                        return;
                     }
                 }
+            }
+            _ = close_watch.changed() => {
+                // 会话因设备掉线/写停滞/背压/管理关闭而关闭：发对应 close code 后退出。
+                send_session_close(&mut sender, &state.session).await;
                 return;
             }
         }
     }
+}
+
+/// 从会话关闭原因取 close code 补发 close frame；无 code 时用 1001（GoingAway）。
+async fn send_session_close(sender: &mut SplitSink<WebSocket, Message>, session: &Session) {
+    let code = session
+        .close_reason()
+        .and_then(CloseReason::close_code)
+        .unwrap_or(CloseCode::GoingAway.as_u16());
+    let _ = sender.send(close_message(code)).await;
 }
 
 /// 构造一个无 reason 的 Close 消息。

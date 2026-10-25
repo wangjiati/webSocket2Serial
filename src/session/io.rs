@@ -94,6 +94,8 @@ fn read_loop(
             let mut transport = transport.lock().unwrap();
             transport.read(&mut buf, read_timeout)
         };
+        // 释放传输锁后让出调度，避免读线程持锁轮询导致写线程饥饿。
+        std::thread::yield_now();
         match read {
             Ok(0) => continue,
             Ok(n) => {
@@ -123,7 +125,11 @@ fn read_loop(
                     "rx read→try_send"
                 );
             }
-            Err(TransportError::Timeout) => continue,
+            Err(TransportError::Timeout) => {
+                // 空闲超时路径补 1ms 短睡，给写线程留出获取互斥锁的窗口。
+                std::thread::sleep(Duration::from_millis(1));
+                continue;
+            }
             Err(TransportError::DeviceLost) => {
                 session.close(CloseReason::DeviceLost);
                 break;

@@ -14,6 +14,7 @@ use tokio_tungstenite::tungstenite::http;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 use websocket2serial::config::{OriginAllowlist, SessionConfig};
+use websocket2serial::serial::TransportError;
 use websocket2serial::session::SessionManager;
 use websocket2serial::ws::AxumDataListenerFactory;
 
@@ -26,13 +27,9 @@ struct App {
 }
 
 async fn test_app() -> App {
-    test_app_with_cfg(SessionConfig::default()).await
-}
-
-/// 构造带指定会话配置的测试应用（真实数据监听器工厂 + 假串口）。
-async fn test_app_with_cfg(cfg: SessionConfig) -> App {
     let serial = FakeTransport::new();
     let transport_factory = Arc::new(FakeTransportFactory::with_transport(serial.clone()));
+    let cfg = SessionConfig::default();
     let origins = OriginAllowlist::new(&[
         "http://127.0.0.1:*".to_string(),
         "http://localhost:*".to_string(),
@@ -135,6 +132,13 @@ async fn oversized_frame_closes_1009() {
 }
 
 #[tokio::test]
+async fn device_loss_sends_4001() {
+    let (mut ws, _url, app) = open_active_data_ws().await;
+    app.serial.fail_next_read(TransportError::DeviceLost);
+    assert_eq!(close_code(&mut ws).await, 4001);
+}
+
+#[tokio::test]
 async fn normal_close_releases_port() {
     let (mut ws, _url, app) = open_active_data_ws().await;
     ws.close(None).await.unwrap();
@@ -159,17 +163,12 @@ async fn normal_close_releases_port() {
 
 #[tokio::test]
 async fn tx_flood_preserves_order_and_completeness() {
-    // 缩小读超时到 1ms，降低读线程对传输锁的占用，让写线程得以连续消费。
-    let app = test_app_with_cfg(SessionConfig {
-        read_timeout_ms: 1,
-        ..SessionConfig::default()
-    })
-    .await;
+    let app = test_app().await;
     let open = app.manager.open(sample_open("COM3")).await.unwrap();
     let mut ws = connect_data(&open.data_url).await.unwrap();
 
     // 多帧连续写入：容量 1 的 tx 通道 + `send().await` 背压，不允许静默丢 TX。
-    let frames: Vec<Vec<u8>> = (0..12)
+    let frames: Vec<Vec<u8>> = (0..50)
         .map(|i| format!("frame-{i:04}").into_bytes())
         .collect();
     let expected: Vec<u8> = frames.iter().flatten().copied().collect();
