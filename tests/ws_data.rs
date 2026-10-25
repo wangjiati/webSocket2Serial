@@ -327,7 +327,13 @@ async fn write_stall_sends_4007() {
     assert_eq!(close_code(&mut ws).await, 4007);
 }
 
-#[tokio::test]
+/// 背压：rx 通道容量 1，读线程第二次 `try_send` 遇满 → 4005。
+///
+/// 显式锁定 current-thread runtime：`push_rx` 之间不 yield，随后的阻塞 sleep 让
+/// 数据循环无法 `rx.recv()` 排空通道，读线程因此确定性撞满。**不要**改成
+/// `flavor = "multi_thread"`——数据循环会在另一线程持续排空 rx，背压永不触发。
+/// 下面的 `timeout` 是兜底：即使有人改了 flavor，测试也会失败而不是永久挂起。
+#[tokio::test(flavor = "current_thread")]
 async fn backpressure_sends_4005() {
     let app = test_app_with_rx_queue(4096).await;
     let open = app.manager.open(sample_open("COM3")).await.unwrap();
@@ -342,5 +348,10 @@ async fn backpressure_sends_4005() {
     // 阻塞主线程一小段，让读线程在没有数据循环竞争的情况下完成两次读取。
     std::thread::sleep(Duration::from_millis(50));
 
-    assert_eq!(close_code(&mut ws).await, 4005);
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), close_code(&mut ws))
+            .await
+            .expect("背压 4005 未在 5s 内到达（runtime 可能被改成了 multi_thread）"),
+        4005
+    );
 }
