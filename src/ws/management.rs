@@ -3,9 +3,9 @@
 //! 路由 `GET /ws`：握手校验 Origin 白名单（失败 403），升级后立即推送 `hello`。
 //! 每个连接一个写任务从 `mpsc::channel(256)` 取文本帧写 sink；主循环把应答与
 //! 广播事件统一排队：响应用 `try_send`，队列满则发 1013 关闭。`session.state`/
-//! `ports.changed`/`admin.state` 始终转发；`debug.frame` 只转发给订阅集且 seq 去重。
-//! 写队列满或广播落后（`RecvError::Lagged`）一律按 1013 关闭，避免静默丢状态事件。
-//! 心跳每 5s 发 Ping，10s 无 Pong 判死。
+//! `ports.changed`/`admin.state` 始终转发，写队列满则 1013 关闭；`debug.frame` 只
+//! 转发给订阅集且 seq 去重，写队列满则静默丢弃（靠 seq 缺口提示）。广播落后
+//! （`RecvError::Lagged`）按 1013 关闭。心跳每 5s 发 Ping，10s 无 Pong 判死。
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -265,8 +265,10 @@ async fn run_management_loop(app: Arc<AppState>, socket: WebSocket) {
 
 /// 把一条广播事件转发到管理连接写队列；返回 `true` 表示写队列满、连接应关闭。
 ///
-/// `debug.frame` 仅转发给订阅集且 seq 去重（不匹配/重复不算错误，返回 `false`）；
-/// 任何事件 `try_send` 满均返回 `true`——状态事件不静默丢，debug 帧满同样关闭。
+/// - `debug.frame`：仅转发给订阅集且 seq 去重（不匹配/重复不算错误）；写队列满则
+///   静默丢弃（返回 `false`，靠 seq 缺口提示），不关闭连接。
+/// - `session.state`/`ports.changed`/`admin.state`：始终转发；写队列满返回 `true`
+///   （调用方以 1013 关闭），保证状态事件不被调试流量静默挤掉。
 fn forward_event(
     subscription: &Mutex<Subscription>,
     tx: &mpsc::Sender<Message>,
@@ -277,6 +279,10 @@ fn forward_event(
         if !sub.contains(&data.session_id) || !sub.track(&data.session_id, data.frame.seq) {
             return false;
         }
+        if let Ok(json) = serde_json::to_string(&event) {
+            let _ = tx.try_send(Message::Text(json));
+        }
+        return false;
     }
     let Ok(json) = serde_json::to_string(&event) else {
         return false;
@@ -475,4 +481,36 @@ fn close_message(code: u16) -> Message {
         code,
         reason: Cow::Borrowed(""),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::{DebugFrame, PortsChangedData};
+
+    /// 写队列满时：`debug.frame` 丢弃（返回 false），状态事件关闭（返回 true）。
+    #[test]
+    fn forward_event_drops_debug_on_full_but_closes_on_state_full() {
+        let (tx, _rx) = mpsc::channel::<Message>(1);
+        let subscription = Mutex::new(Subscription {
+            selector: SessionSelector::All,
+            seen: HashMap::new(),
+        });
+        // 塞满容量为 1 的写队列。
+        assert!(tx.try_send(Message::Text("full".into())).is_ok());
+
+        // debug.frame 满 → 丢弃，返回 false（不关闭连接）。
+        let debug = Event::DebugFrame(DebugFrameData {
+            session_id: "s1".into(),
+            frame: DebugFrame::new("rx", 1, 0, vec![0u8; 4]),
+        });
+        assert!(!forward_event(&subscription, &tx, debug));
+
+        // 状态事件满 → 返回 true（调用方以 1013 关闭）。
+        let state = Event::PortsChanged(PortsChangedData {
+            added: vec![],
+            removed: vec![],
+        });
+        assert!(forward_event(&subscription, &tx, state));
+    }
 }

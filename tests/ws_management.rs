@@ -21,8 +21,7 @@ use websocket2serial::app::build_app;
 use websocket2serial::config::{Config, OriginAllowlist, ServerConfig, SessionConfig};
 use websocket2serial::protocol::SessionState;
 use websocket2serial::session::{
-    AttachedData, CloseReason, DataError, DataListenerFactory, DataListenerHandle, Session,
-    SessionManager,
+    AttachedData, DataError, DataListenerFactory, DataListenerHandle, Session, SessionManager,
 };
 use websocket2serial::ws::heartbeat::Heartbeat;
 use websocket2serial::ws::AxumDataListenerFactory;
@@ -470,7 +469,8 @@ async fn slow_consumer_is_closed_with_1013_and_reconnect_lists_cleanly() {
     )
     .await;
 
-    // 客户端不读管理 WS：灌入大量 TX 调试帧（每写 64 KiB 产生约 57 帧），写队列终将满。
+    // 客户端不读管理 WS：灌入大量 TX 调试帧填满写队列（debug 帧满则丢，不触发 1013）。
+    // 每写之间节流 1ms，避免广播被写线程压垮产生 Lagged（Lagged 也会 1013，会失去区分力）。
     let payload = vec![0u8; 64 * 1024];
     for _ in 0..64 {
         app.built
@@ -479,10 +479,11 @@ async fn slow_consumer_is_closed_with_1013_and_reconnect_lists_cleanly() {
             .write(&id, payload.clone())
             .await
             .unwrap();
+        tokio::time::sleep(Duration::from_millis(1)).await;
     }
-    // 等待写线程写完（tx_bytes 达到预期），保证调试帧已全部生成。
+    // 等待写线程写完（tx_bytes 达到预期），保证调试帧已全部生成、写队列已满。
     let expected = (64 * 64 * 1024) as u64;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     loop {
         let tx_bytes = app
             .built
@@ -504,21 +505,21 @@ async fn slow_consumer_is_closed_with_1013_and_reconnect_lists_cleanly() {
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
 
-    // 触发关闭会话（session.state(closed) 事件会走同一广播）；写队列已被调试帧灌满，
-    // 任何帧（含状态事件）遇满都触发 1013 关闭管理连接。
-    app.built
-        .state
-        .manager
-        .close(&id, CloseReason::AdminClosed)
-        .await
-        .unwrap();
-    assert_eq!(close_code(&mut ws).await, 1013);
+    // 触发状态事件（ports.changed）→ 写队列满 → 1013 关闭管理连接（不靠 debug 满）。
+    app.scanner.add(sample_port("COM9"));
+    app.hotplug_tick().await;
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), close_code(&mut ws))
+            .await
+            .expect("状态事件满未在 5s 内触发 1013"),
+        1013
+    );
 
-    // 重连后 session.list 为空（会话已关闭，状态一致）。
+    // 重连后 session.list 仍可查询（会话 active，状态对齐）。
     let mut ws2 = connect_management(&app).await;
     let _hello = next_event(&mut ws2).await;
     let list = request(&mut ws2, "session.list", json!({})).await;
-    assert_eq!(list["data"]["sessions"], json!([]));
+    assert_eq!(list["data"]["sessions"][0]["state"], "active");
 }
 
 #[tokio::test]
@@ -641,4 +642,65 @@ async fn broadcast_lag_closes_1013() {
 
     // 主循环随后 recv 到 Lagged → 1013 关闭。
     assert_eq!(close_code(&mut ws).await, 1013);
+}
+
+#[tokio::test]
+async fn debug_flood_does_not_close_management() {
+    let app = test_app().await;
+    let mut ws = connect_management(&app).await;
+    let _hello = next_event(&mut ws).await;
+    let open = request(&mut ws, "session.open", open_params()).await;
+    let id = open["data"]["sessionId"].as_str().unwrap().to_string();
+    app.attach(&id).await;
+    request(
+        &mut ws,
+        "debug.subscribe",
+        json!({"sessionIds":[id],"replay":false}),
+    )
+    .await;
+
+    // 拆成 sink/stream：后台读任务持续 drain，避免写队列满。
+    let (mut sink, mut stream) = ws.split();
+    let list_id = "debug-flood-alive";
+    let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+    let drain = tokio::spawn(async move {
+        while let Some(Ok(msg)) = stream.next().await {
+            if let Message::Text(text) = msg {
+                if let Ok(v) = serde_json::from_str::<Value>(&text) {
+                    if v.get("id").and_then(Value::as_str) == Some(list_id) {
+                        let _ = resp_tx.send(v);
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    // 后台持续灌 TX 调试帧（洪峰，1ms 节流避免广播 Lagged）。
+    let manager = Arc::clone(&app.built.state.manager);
+    let flood_id = id.clone();
+    let flood = tokio::spawn(async move {
+        let payload = vec![0u8; 64 * 1024];
+        loop {
+            if manager.write(&flood_id, payload.clone()).await.is_err() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    });
+
+    // 洪峰进行中发 session.list，断言 2s 内响应（debug 洪峰未关闭连接）。
+    sink.send(Message::Text(
+        json!({"id": list_id, "action": "session.list", "params": {}}).to_string(),
+    ))
+    .await
+    .unwrap();
+    let response = tokio::time::timeout(Duration::from_secs(2), resp_rx)
+        .await
+        .expect("debug 洪峰下 session.list 无响应（连接被 1013 关闭）")
+        .unwrap();
+    assert!(response["data"]["sessions"].is_array());
+
+    flood.abort();
+    drain.abort();
 }
