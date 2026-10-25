@@ -352,6 +352,32 @@ impl SessionManager {
         Ok(attached)
     }
 
+    /// 管理端调试写：校验 `active`，在 50ms 内把数据送入网页→串口 tx 队列。
+    ///
+    /// 队列满（写线程忙）超时返回 [`ManagerError::LimitExceeded`]；会话关闭导致
+    /// 通道失效则返回 [`ManagerError::SessionState`]。
+    pub async fn write(&self, session_id: &str, data: Vec<u8>) -> Result<usize, ManagerError> {
+        let session = self
+            .inner
+            .shared
+            .sessions
+            .lock()
+            .unwrap()
+            .get(session_id)
+            .cloned()
+            .ok_or(ManagerError::SessionNotFound)?;
+        if session.state() != SessionState::Active {
+            return Err(ManagerError::SessionState);
+        }
+        let tx = session.tx_sender().ok_or(ManagerError::SessionState)?;
+        let written = data.len();
+        match tokio::time::timeout(Duration::from_millis(50), tx.send(data)).await {
+            Ok(Ok(())) => Ok(written),
+            Ok(Err(_)) => Err(ManagerError::SessionState),
+            Err(_) => Err(ManagerError::LimitExceeded),
+        }
+    }
+
     /// 数据 WS 异常断开：`active` → `grace`，发事件并启动 10s 宽限定时器。
     pub async fn enter_grace(&self, session_id: &str) -> Result<(), ManagerError> {
         let shared = Arc::clone(&self.inner.shared);

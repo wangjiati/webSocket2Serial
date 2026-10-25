@@ -343,6 +343,11 @@ impl Session {
         }
     }
 
+    /// 取一个网页→串口的发送端克隆（管理端 `session.write` 用）。
+    pub fn tx_sender(&self) -> Option<mpsc::Sender<Vec<u8>>> {
+        self.tx.lock().unwrap().as_ref().cloned()
+    }
+
     /// 数据 WS 附加：`awaiting`/`grace` → `active`，返回收发通道。
     ///
     /// 首次从 `awaiting` 进入 `active` 时启动读/写线程。

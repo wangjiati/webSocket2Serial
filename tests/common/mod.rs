@@ -12,9 +12,14 @@ use std::time::Duration;
 
 use tokio::sync::broadcast;
 
+use websocket2serial::app::AdminController;
 use websocket2serial::config::SessionConfig;
-use websocket2serial::protocol::{FlowControl, OpenParams, OpenResult, Parity};
-use websocket2serial::serial::{SerialParams, SerialTransport, TransportError, TransportFactory};
+use websocket2serial::protocol::{
+    AdminState, FlowControl, OpenParams, OpenResult, Parity, PortInfo,
+};
+use websocket2serial::serial::{
+    PortScanner, SerialParams, SerialTransport, TransportError, TransportFactory,
+};
 use websocket2serial::session::{
     DataError, DataListenerFactory, DataListenerHandle, Session, SessionManager,
 };
@@ -500,4 +505,56 @@ pub fn test_manager_with_drop_notifying_serial() -> (SessionManager, FakeTranspo
         events,
     );
     (mgr, fake, dropped)
+}
+
+/// 假串口扫描器：返回预设的端口快照（默认空）。
+#[derive(Debug, Default)]
+pub struct FakeScanner {
+    ports: Mutex<Vec<PortInfo>>,
+}
+
+impl FakeScanner {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 设置下一次 `scan` 返回的端口快照。
+    pub fn set_ports(&self, ports: Vec<PortInfo>) {
+        *self.ports.lock().unwrap() = ports;
+    }
+}
+
+impl PortScanner for FakeScanner {
+    fn scan(&self) -> Result<Vec<PortInfo>, TransportError> {
+        Ok(self.ports.lock().unwrap().clone())
+    }
+}
+
+/// 假管理页控制器：`status`/`set_enabled` 只改内存中的 `AdminState`。
+#[derive(Debug)]
+pub struct FakeAdminController {
+    state: Mutex<AdminState>,
+}
+
+impl FakeAdminController {
+    pub fn new() -> Self {
+        Self {
+            state: Mutex::new(AdminState {
+                enabled: true,
+                url: "http://127.0.0.1:8766/".to_string(),
+            }),
+        }
+    }
+}
+
+impl AdminController for FakeAdminController {
+    fn status(&self) -> AdminState {
+        self.state.lock().unwrap().clone()
+    }
+
+    fn set_enabled(&self, enabled: bool) -> AdminState {
+        let mut state = self.state.lock().unwrap();
+        state.enabled = enabled;
+        state.clone()
+    }
 }

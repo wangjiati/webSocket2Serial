@@ -3,8 +3,10 @@
 //! - [`serve_with_nodelay`]：数据面与管理面（任务 10）共用的自定义 accept 循环，
 //!   每个 `TcpStream` 先 `set_nodelay(true)` 再交给 hyper/axum，以降低小帧透传延迟。
 //! - [`data`]：数据面 WebSocket 的握手、attach、二进制透传与 close code。
+//! - [`management`]：管理面 WebSocket 的 Origin 校验、`hello`、7 个 action 分发。
 
 pub mod data;
+pub mod management;
 
 use axum::Router;
 use hyper::body::Incoming;
