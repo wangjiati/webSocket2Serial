@@ -26,11 +26,57 @@ fn admin_assets_have_required_controls_and_no_cdn() {
     ] {
         assert!(html.contains(&format!("id=\"{id}\"")), "missing {id}");
     }
+    for id in [
+        "demo-statusbar",
+        "demo-tabs",
+        "demo-tab-overview",
+        "demo-tab-ports",
+        "demo-tab-sessions",
+        "demo-tab-terminal",
+        "demo-tab-debug",
+        "demo-tab-edge",
+        "demo-tab-events",
+        "demo-btn-run-demo",
+        "demo-ports-body",
+        "demo-sessions-body",
+        "demo-log-A",
+        "demo-log-B",
+        "demo-debug-body",
+        "demo-edge-log",
+        "demo-event-log",
+    ] {
+        assert!(html.contains(&format!("id=\"{id}\"")), "missing {id}");
+    }
+    assert!(!html.contains("id=\"tab-"));
     assert!(!html.contains("cdn."));
     assert!(!html.contains("https://unpkg"));
     let api = include_str!("../src/assets/js/api.js");
     assert!(api.contains("127.0.0.1"));
     assert!(api.contains("reconnect"));
+}
+
+/// 提取 HTML 中所有 `id="..."`，用于检查重复 ID。
+fn collect_ids(html: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    let mut rest = html;
+    while let Some(pos) = rest.find("id=\"") {
+        let start = pos + 4;
+        let end = start + rest[start..].find('"').unwrap();
+        ids.push(rest[start..end].to_string());
+        rest = &rest[end..];
+    }
+    ids
+}
+
+/// 管理页把演示 DOM 并进同一文档后，所有 id 必须唯一。
+#[test]
+fn admin_html_ids_are_unique() {
+    let html = include_str!("../src/assets/index.html");
+    let mut ids = collect_ids(html);
+    ids.sort();
+    let before = ids.len();
+    ids.dedup();
+    assert_eq!(before, ids.len(), "index.html 存在重复 id");
 }
 
 /// `/js/*` 由 HTTP 管理服务静态分发，且内容非空、Content-Type 正确。
