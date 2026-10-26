@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WebSocket2Serial 帮助文档</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header class="page-header">
+      <h1>帮助文档</h1>
+      <nav class="page-links">
+        <a href="/">← 返回管理页</a>
+        <a href="/assistant" target="_blank" rel="noopener">串口助手 ↗</a>
+        <a href="/test" target="_blank" rel="noopener">功能测试 ↗</a>
+      </nav>
+    </header>
+
+    <main id="help-page">
+      <section class="help">
+        <p class="help-lead">
+          WebSocket2Serial 是本机常驻的 WebSocket ↔ 串口透传服务。本页汇总页面入口、串口参数、
+          占用规则和完整的通信协议。
+        </p>
+
+        <nav class="help-toc" aria-label="目录">
+          <a href="#quick-start">快速开始</a>
+          <a href="#pages">三个页面</a>
+          <a href="#params">串口参数</a>
+          <a href="#busy-grace">串口占用与宽限</a>
+          <a href="#protocol">通信协议</a>
+          <a href="#errors">错误码</a>
+          <a href="#web-serial">与 Web Serial 的区别</a>
+          <a href="#admin-off">管理服务关闭后</a>
+        </nav>
+
+        <details open id="quick-start">
+          <summary>快速开始</summary>
+          <ol>
+            <li>在管理页「串口」表确认当前机器识别到的串口。</li>
+            <li>点「串口助手」或端口行的「用助手打开」，在新标签选择参数并打开串口。</li>
+            <li>在助手页发送文本或 HEX，接收区查看设备返回；需要协议/边界验证时打开「功能测试」。</li>
+            <li>调试结束后点「关闭串口」立即释放端口，再关闭标签页。</li>
+          </ol>
+        </details>
+
+        <details id="pages">
+          <summary>三个页面分别做什么</summary>
+          <ul>
+            <li><strong>管理页</strong>：服务状态、串口列表、会话监控、帮助入口。</li>
+            <li><strong>串口助手</strong>：自己打开/关闭一个串口，做日常人工收发与调试；多个串口请开多个标签页。</li>
+            <li><strong>功能测试</strong>：协议动作、事件、错误码、宽限重连与一键完整演示。</li>
+          </ul>
+        </details>
+
+        <details id="params">
+          <summary>串口参数</summary>
+          <p>波特率、数据位、校验、停止位、流控和 DTR/RTS 必须与设备一致。不确定时先用 115200 8N1、无流控。</p>
+          <ul>
+            <li>数据位：5–8；v1 校验仅支持 none / odd / even。</li>
+            <li>流控：none / software / hardware。</li>
+            <li>DTR/RTS 可留默认，打开时再施加指定电平。</li>
+          </ul>
+        </details>
+
+        <details id="busy-grace">
+          <summary>串口占用与宽限</summary>
+          <p>
+            同一串口同时只允许一个数据客户端。若助手页提示 <code>PORT_BUSY</code>，请先在管理页「会话」表关闭占用会话，
+            或关闭其他串口程序。直接关闭助手标签页不会立刻释放串口，会进入 10 秒宽限；建议先点「关闭串口」。
+          </p>
+        </details>
+
+        <h2 id="protocol">通信协议（ws2s/v1）</h2>
+        <p>
+          协议固定使用 <code>127.0.0.1</code>，不使用 <code>localhost</code>。管理 WS 只做浏览器 Origin 白名单校验；
+          数据 WS 仅靠 URL 中的随机 token 识别。数据面是流式透传，不保证报文边界。
+        </p>
+
+        <h3>1. 两类连接</h3>
+        <table>
+          <thead>
+            <tr><th>连接</th><th>地址</th><th>用途</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>管理 WebSocket</td><td><code>ws://127.0.0.1:8765/ws</code></td><td>枚举串口、打开/关闭会话、调试订阅、状态事件</td></tr>
+            <tr><td>数据 WebSocket</td><td><code>ws://127.0.0.1:&lt;dataPort&gt;/ws/&lt;token&gt;</code></td><td>串口字节二进制原样透传；每个会话一个</td></tr>
+          </tbody>
+        </table>
+
+        <h3>2. 消息封装</h3>
+        <p>请求（客户端 → 管理 WS）：</p>
+        <pre><code>{ "id": "任意字符串", "action": "动作名", "params": { } }</code></pre>
+        <p>成功应答：</p>
+        <pre><code>{ "id": "...", "ok": true, "data": { } }</code></pre>
+        <p>失败应答：</p>
+        <pre><code>{ "id": "...", "ok": false, "error": { "code": "PORT_BUSY", "message": "串口被占用", "detail": { } } }</code></pre>
+        <p>事件（不带 <code>id</code>）：</p>
+        <pre><code>{ "event": "hello", "data": { } }</code></pre>
+        <p>客户端按「有无 <code>id</code>」区分应答与事件，并按 <code>id</code> 关联请求。</p>
+
+        <h3>3. 7 个管理动作</h3>
+        <table>
+          <thead>
+            <tr><th>动作</th><th>参数</th><th>返回</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>ports.list</code></td><td><code>{}</code></td><td><code>{ ports: PortInfo[] }</code></td></tr>
+            <tr><td><code>session.open</code></td><td>OpenParams</td><td>OpenResult</td></tr>
+            <tr><td><code>session.close</code></td><td><code>{ sessionId }</code></td><td><code>{ closed: true }</code></td></tr>
+            <tr><td><code>session.list</code></td><td><code>{}</code></td><td><code>{ sessions: SessionInfo[] }</code></td></tr>
+            <tr><td><code>session.write</code></td><td><code>{ sessionId, dataB64 }</code></td><td><code>{ written }</code></td></tr>
+            <tr><td><code>debug.subscribe</code></td><td><code>{ sessionIds: "all" | string[], replay?: boolean }</code></td><td><code>{ subscribed: string[] }</code></td></tr>
+            <tr><td><code>admin.set</code></td><td><code>{ enabled: boolean }</code></td><td>AdminState</td></tr>
+          </tbody>
+        </table>
+
+        <h4>PortInfo</h4>
+        <table>
+          <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td><code>path</code></td><td>string</td><td>串口路径，如 COM3、/dev/ttyUSB0</td></tr>
+            <tr><td><code>portType</code></td><td>string | null</td><td>端口类型，如 usb</td></tr>
+            <tr><td><code>vid</code> / <code>pid</code></td><td>number | null</td><td>厂商 / 产品 ID</td></tr>
+            <tr><td><code>serialNumber</code></td><td>string | null</td><td>序列号</td></tr>
+            <tr><td><code>manufacturer</code> / <code>product</code></td><td>string | null</td><td>厂商 / 产品名</td></tr>
+          </tbody>
+        </table>
+
+        <h4>OpenParams</h4>
+        <table>
+          <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td><code>path</code></td><td>string</td><td>串口路径，非空</td></tr>
+            <tr><td><code>baudRate</code></td><td>number</td><td>波特率，&gt; 0</td></tr>
+            <tr><td><code>dataBits</code></td><td>number</td><td>5–8</td></tr>
+            <tr><td><code>parity</code></td><td>string</td><td>none / odd / even（v1 仅支持前三个）</td></tr>
+            <tr><td><code>stopBits</code></td><td>number</td><td>1 或 2</td></tr>
+            <tr><td><code>flowControl</code></td><td>string</td><td>none / software / hardware</td></tr>
+            <tr><td><code>dtr</code> / <code>rts</code></td><td>boolean | 缺省</td><td>打开后立即施加的电平</td></tr>
+          </tbody>
+        </table>
+
+        <h4>OpenResult</h4>
+        <table>
+          <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td><code>sessionId</code></td><td>string</td><td>会话 ID；复用时为原 ID</td></tr>
+            <tr><td><code>dataUrl</code></td><td>string</td><td>数据 WS URL，形如 <code>ws://127.0.0.1:&lt;port&gt;/ws/&lt;token&gt;</code></td></tr>
+            <tr><td><code>connectTimeoutMs</code></td><td>number</td><td>等待数据 WS 连入的时限（默认 5000）</td></tr>
+            <tr><td><code>reused</code></td><td>boolean</td><td>是否复用已有会话（复用会轮换 token）</td></tr>
+            <tr><td><code>counters</code></td><td>Counters</td><td>计数快照</td></tr>
+          </tbody>
+        </table>
+        <p><code>Counters</code>：<code>rxBytes</code>、<code>txBytes</code>、<code>rxDiscardedBytes</code>，均为 64 位整数。</p>
+
+        <h4>SessionInfo（session.list）</h4>
+        <p>
+          主要字段：<code>sessionId</code>、<code>state</code>（awaiting / active / grace / closed）、<code>port</code>、
+          <code>params</code>、<code>createdAt</code>、<code>dataPort</code>、<code>connectBy</code>、<code>activeSince</code>、
+          <code>graceEndsAt</code>、<code>counters</code>、<code>lastGap</code>、<code>lastError</code>、<code>lastRxAt</code>、<code>lastTxAt</code>。
+        </p>
+        <p>
+          <code>lastGap</code>：<code>startedAt</code>、<code>durationMs</code>、<code>discardedBytes</code>、<code>resumed</code>。
+        </p>
+
+        <h4>session.write 与 debug.subscribe</h4>
+        <ul>
+          <li><code>session.write</code>：base64 原始字节，单次 ≤ 64 KiB；仅 active 会话可用，仅用于排障，可能造成字节交错。</li>
+          <li><code>debug.subscribe</code>：<code>replay: true</code> 先回放 64 KiB 环形缓冲，再收实时帧；调试帧可丢弃，<code>seq</code> 可见缺口。</li>
+          <li><code>admin.set</code>：运行时开关管理页服务，不回写配置；成功后广播 <code>admin.state</code>。</li>
+        </ul>
+
+        <h3>4. 5 个事件</h3>
+        <table>
+          <thead><tr><th>事件</th><th>关键字段</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td><code>hello</code></td><td>protocol、version、os、arch、managementPort、admin、autostart</td><td>管理连接建立后立即推送，protocol 固定 <code>ws2s/v1</code></td></tr>
+            <tr><td><code>ports.changed</code></td><td>added、removed</td><td>热插拔轮询（每 2s）发现变化</td></tr>
+            <tr><td><code>session.state</code></td><td>sessionId、state、reason、closeCode、counters、lastGap、lastError</td><td>会话状态迁移</td></tr>
+            <tr><td><code>debug.frame</code></td><td>sessionId、direction、seq、tsMs、size、dataB64、replay</td><td>仅推送给已订阅连接</td></tr>
+            <tr><td><code>admin.state</code></td><td>enabled、url</td><td>管理页服务开关变化</td></tr>
+          </tbody>
+        </table>
+        <p>
+          <code>session.state.reason</code> 可能为：CLIENT_CLOSED、ADMIN_CLOSED、DEVICE_LOST、WRITE_TIMEOUT、
+          SERIAL_IO_ERROR、BACKPRESSURE、GRACE_TIMEOUT、SESSION_EXPIRED、SERVER_SHUTDOWN。
+        </p>
+
+        <h3 id="errors">5. 错误码与 close code</h3>
+        <h4>管理协议错误码（error.code）</h4>
+        <table>
+          <thead><tr><th>错误码</th><th>含义</th></tr></thead>
+          <tbody>
+            <tr><td><code>INVALID_REQUEST</code></td><td>JSON 格式或请求结构错误</td></tr>
+            <tr><td><code>UNKNOWN_ACTION</code></td><td>未知 action</td></tr>
+            <tr><td><code>INVALID_PARAMS</code></td><td>参数缺失或取值非法</td></tr>
+            <tr><td><code>PORT_NOT_FOUND</code></td><td>指定串口不存在</td></tr>
+            <tr><td><code>PORT_BUSY</code></td><td>串口被占用，或同端口已有 active 会话</td></tr>
+            <tr><td><code>PERMISSION_DENIED</code></td><td>无权限打开串口</td></tr>
+            <tr><td><code>SERIAL_OPEN_FAILED</code></td><td>其他打开失败</td></tr>
+            <tr><td><code>SESSION_NOT_FOUND</code></td><td>会话不存在或已关闭</td></tr>
+            <tr><td><code>SESSION_STATE</code></td><td>当前状态不允许该操作</td></tr>
+            <tr><td><code>LIMIT_EXCEEDED</code></td><td>超过最大会话数或队列上限</td></tr>
+            <tr><td><code>INTERNAL</code></td><td>未归类的内部错误</td></tr>
+          </tbody>
+        </table>
+
+        <h4>数据 WS close code</h4>
+        <table>
+          <thead><tr><th>代码</th><th>含义</th></tr></thead>
+          <tbody>
+            <tr><td><code>1000</code></td><td>客户端正常关闭，服务端按 CLIENT_CLOSED 释放串口</td></tr>
+            <tr><td><code>1001</code></td><td>服务端退出/心跳判死等正常性离开</td></tr>
+            <tr><td><code>1003</code></td><td>收到文本帧（数据面只接受二进制）</td></tr>
+            <tr><td><code>1009</code></td><td>单帧超过上限（默认 1 MiB）</td></tr>
+            <tr><td><code>4001</code></td><td>串口设备消失（DEVICE_LOST）</td></tr>
+            <tr><td><code>4002</code></td><td>端口被占用 / 会话已 active，第二客户端被拒</td></tr>
+            <tr><td><code>4004</code></td><td>管理端关闭（ADMIN_CLOSED）</td></tr>
+            <tr><td><code>4005</code></td><td>接收背压（BACKPRESSURE）</td></tr>
+            <tr><td><code>4007</code></td><td>串口读写错误 / 写停滞超时（SERIAL_IO_ERROR / WRITE_TIMEOUT）</td></tr>
+          </tbody>
+        </table>
+
+        <h4>管理 WS close code</h4>
+        <table>
+          <thead><tr><th>代码</th><th>含义</th></tr></thead>
+          <tbody>
+            <tr><td><code>1000</code></td><td>客户端主动关闭的回显</td></tr>
+            <tr><td><code>1001</code></td><td>心跳判死（10s 无 Pong）或离开</td></tr>
+            <tr><td><code>1013</code></td><td>写队列满 / 广播落后，服务端强制断开（客户端应重连 + session.list 对齐）</td></tr>
+          </tbody>
+        </table>
+        <p>会话关闭原因以数据 WS 的 close code 为准，不要依赖管理事件与数据帧的到达顺序。</p>
+
+        <h3>6. 复用、token 与重连</h3>
+        <ul>
+          <li>同端口已有 <code>awaiting</code> / <code>grace</code> 会话：<code>session.open</code> 返回原会话（<code>reused=true</code>），轮换 token 和 dataUrl，旧 URL 立即失效。</li>
+          <li>同端口已有 <code>active</code> 会话：返回 <code>PORT_BUSY</code>；每端口同时只有一个活跃数据连接。</li>
+          <li>token 为 128 位随机值十六进制串，仅随 <code>session.open</code> 返回，不出现在 <code>session.list</code>。</li>
+          <li>页面刷新/重启后直接再次 <code>session.open</code>（带相同参数）即可接回；不需要保存 sessionId/token。</li>
+          <li>数据 WS 断开时先在宽限期内重连原 dataUrl；失败后 <code>session.open</code> 复用并轮换 token，按 200–500ms 起步退避。</li>
+          <li>管理 WS 重连后先 <code>session.list</code> 对齐状态，再恢复 <code>debug.subscribe</code>；CSP 需允许 <code>ws://127.0.0.1:*</code>。</li>
+        </ul>
+
+        <details id="web-serial">
+          <summary>与浏览器 Web Serial 的区别</summary>
+          <p>
+            本工具通过本机 WebSocket2Serial 透传服务访问串口，不需要浏览器 Web Serial 授权弹窗；
+            因此页面必须从 <code>http://127.0.0.1:8766</code> 打开，且串口仍受“同一串口一个数据客户端”的限制。
+          </p>
+        </details>
+
+        <details id="admin-off">
+          <summary>管理服务关闭后怎么恢复</summary>
+          <p>管理页关闭只影响 8766 的 HTTP 页面，不影响管理 WS 与已打开的数据 WS。可从托盘菜单重新开启，或用 <code>--admin</code> 启动参数强制开启。</p>
+        </details>
+      </section>
+    </main>
+  </body>
+</html>

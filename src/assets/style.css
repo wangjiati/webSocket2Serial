@@ -1340,89 +1340,140 @@ button.active {
   }
 }
 
-/* 管理页入口与帮助 */
+/* 帮助文档页 */
 
-.entry-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
-  margin-bottom: 18px;
-}
-
-.entry-card {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 16px 18px;
+#help-page .help {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 18px 20px 40px;
+  background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--panel);
-  color: var(--text);
-  text-decoration: none;
 }
 
-.entry-card strong {
-  font-size: 15px;
-}
-
-.entry-card span {
+#help-page .help-lead {
   color: var(--muted);
   font-size: 13px;
-  line-height: 1.55;
+  line-height: 1.7;
 }
 
-.entry-card em {
-  color: var(--accent);
-  font-size: 12px;
-  font-style: normal;
-}
-
-.entry-card:hover {
-  border-color: var(--accent);
-}
-
-#help.help {
-  margin-top: 24px;
-  padding: 14px 16px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--panel);
-}
-
-#help h2 {
+#help-page .help-toc {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 10px 0 14px;
   margin-bottom: 8px;
+  border-bottom: 1px solid var(--border);
 }
 
-#help details {
+#help-page .help-toc a {
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 13px;
+}
+
+#help-page .help-toc a:hover {
+  text-decoration: underline;
+}
+
+#help-page details {
   padding: 8px 0;
   border-top: 1px solid var(--border);
 }
 
-#help details:first-of-type {
+#help-page details:first-of-type {
   border-top: none;
 }
 
-#help summary {
+#help-page summary {
   cursor: pointer;
   font-weight: 600;
 }
 
-#help p,
-#help li {
-  color: var(--text);
-  font-size: 13px;
-  line-height: 1.65;
+#help-page h2 {
+  margin: 26px 0 10px;
+  font-size: 1.15rem;
+  scroll-margin-top: 12px;
 }
 
-#help code {
+#help-page h3 {
+  margin: 22px 0 8px;
+  font-size: 1rem;
+  color: var(--text);
+  scroll-margin-top: 12px;
+}
+
+#help-page h4 {
+  margin: 16px 0 6px;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+#help-page p,
+#help-page li {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+#help-page ul,
+#help-page ol {
+  padding-left: 22px;
+}
+
+#help-page code {
   font-family: var(--mono);
   background: var(--accent-weak);
   padding: 1px 5px;
   border-radius: 4px;
+  font-size: 12px;
+}
+
+#help-page table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0 14px;
+  font-size: 13px;
+}
+
+#help-page th,
+#help-page td {
+  padding: 6px 9px;
+  border: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+  white-space: normal;
+}
+
+#help-page th {
+  background: #fafbfc;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+#help-page pre {
+  margin: 8px 0 14px;
+  padding: 10px 12px;
+  background: #f6f8fa;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow-x: auto;
+}
+
+#help-page pre code {
+  background: transparent;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1.55;
 }
 
 @media (max-width: 700px) {
-  .entry-grid {
-    grid-template-columns: 1fr;
+  #help-page .help {
+    padding: 14px 12px 28px;
+  }
+
+  #help-page table {
+    display: block;
+    overflow-x: auto;
   }
 }

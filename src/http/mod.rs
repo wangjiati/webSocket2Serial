@@ -31,6 +31,8 @@ const INDEX_HTML: &str = include_str!("../assets/index.html");
 const ASSISTANT_HTML: &str = include_str!("../assets/assistant.html");
 /// 内嵌的功能测试页。
 const TEST_HTML: &str = include_str!("../assets/test.html");
+/// 内嵌的帮助文档页。
+const HELP_HTML: &str = include_str!("../assets/help.html");
 /// 内嵌的样式。
 const STYLE_CSS: &str = include_str!("../assets/style.css");
 /// 内嵌的 JS 模块（任务 13）。
@@ -234,6 +236,7 @@ fn build_router(management_port: u16, autostart: Arc<AtomicBool>, url: String) -
         .route("/", get(index))
         .route("/assistant", get(assistant))
         .route("/test", get(test))
+        .route("/help", get(help))
         .route("/style.css", get(style))
         .route("/js/*path", get(js))
         .route("/api/config", get(config))
@@ -250,6 +253,10 @@ async fn assistant() -> impl IntoResponse {
 
 async fn test() -> impl IntoResponse {
     ([(header::CACHE_CONTROL, "no-store")], Html(TEST_HTML))
+}
+
+async fn help() -> impl IntoResponse {
+    ([(header::CACHE_CONTROL, "no-store")], Html(HELP_HTML))
 }
 
 async fn style() -> impl IntoResponse {

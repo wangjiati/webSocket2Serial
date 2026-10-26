@@ -23,12 +23,14 @@ fn admin_assets_have_required_controls_and_no_cdn() {
 #[test]
 fn index_page_links_open_new_tabs() {
     let html = include_str!("../src/assets/index.html");
-    for href in ["/assistant", "/test"] {
+    for href in ["/assistant", "/test", "/help"] {
         assert!(html.contains(&format!("href=\"{href}\"")), "missing {href}");
     }
     assert!(html.contains("target=\"_blank\""));
     assert!(!html.contains("main-tabs"));
     assert!(!html.contains("id=\"demo\""));
+    assert!(!html.contains("entry-assistant"));
+    assert!(!html.contains("entry-test"));
     assert!(!html.contains("cdn."));
     assert!(!html.contains("https://unpkg"));
     let api = include_str!("../src/assets/js/api.js");
@@ -36,17 +38,45 @@ fn index_page_links_open_new_tabs() {
     assert!(api.contains("reconnect"));
 }
 
-/// 管理页入口卡片、自启状态、会话 DROP 与帮助文档。
+/// 帮助文档独立页：包含通信协议章节。
+#[test]
+fn help_page_has_protocol_chapter() {
+    let html = include_str!("../src/assets/help.html");
+    assert!(html.contains("id=\"help-page\""));
+    assert!(html.contains("通信协议"));
+    for term in [
+        "ws2s/v1",
+        "ports.list",
+        "session.open",
+        "session.close",
+        "session.list",
+        "session.write",
+        "debug.subscribe",
+        "admin.set",
+        "hello",
+        "ports.changed",
+        "session.state",
+        "debug.frame",
+        "admin.state",
+        "PORT_BUSY",
+        "4002",
+        "4004",
+        "1009",
+        "ws://127.0.0.1:8765/ws",
+    ] {
+        assert!(html.contains(term), "帮助页缺少协议内容：{term}");
+    }
+    assert!(!html.contains("cdn."));
+}
+
+/// 管理页自启状态、会话 DROP 与帮助入口。
 #[test]
 fn admin_help_and_monitor_controls() {
     let html = include_str!("../src/assets/index.html");
-    for id in ["help", "autostart", "entry-assistant", "entry-test"] {
-        assert!(html.contains(&format!("id=\"{id}\"")), "missing {id}");
-    }
-    assert!(html.contains("PORT_BUSY"));
-    assert!(html.contains("10 秒"));
-    assert!(html.contains("Web Serial"));
+    assert!(html.contains("id=\"autostart\""));
+    assert!(html.contains("href=\"/help\""), "missing help link");
     assert!(html.contains("<th>DROP</th>"));
+    assert!(!html.contains("id=\"help\""), "帮助文档应独立成页");
     let js = include_str!("../src/assets/js/overview.js");
     assert!(js.contains("/assistant?port="), "端口行应能打开助手");
     assert!(js.contains("refreshSessions"), "管理页应轮询会话");
@@ -112,6 +142,7 @@ fn admin_html_ids_are_unique() {
             include_str!("../src/assets/assistant.html"),
         ),
         ("test.html", include_str!("../src/assets/test.html")),
+        ("help.html", include_str!("../src/assets/help.html")),
     ] {
         let mut ids = collect_ids(html);
         ids.sort();
@@ -213,6 +244,21 @@ async fn serves_test_page() {
     svc.shutdown().await;
 }
 
+/// `/help` 返回独立帮助文档页。
+#[tokio::test]
+async fn serves_help_page() {
+    let svc = AdminService::start(0, 8765).await.unwrap();
+    let resp = client()
+        .get(format!("{}/help", svc.url()))
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.status().is_success(), "/help 未返回成功");
+    let html = resp.text().await.unwrap();
+    assert!(html.contains("帮助文档"));
+    svc.shutdown().await;
+}
+
 /// 演示模块必须使用共享的 ManagementClient 契约（request 直接返回 data）。
 #[test]
 fn demo_module_uses_shared_client_contract() {
@@ -246,6 +292,7 @@ async fn static_assets_are_no_store() {
         "/",
         "/assistant",
         "/test",
+        "/help",
         "/style.css",
         "/js/api.js",
         "/api/config",
