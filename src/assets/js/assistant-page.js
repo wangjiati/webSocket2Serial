@@ -35,6 +35,7 @@ const state = {
   timer: null,
   timerSent: 0,
   timerCount: 0,
+  statsTimer: null,
 };
 
 function loadJSON(key, fallback) {
@@ -115,16 +116,26 @@ function updateStats() {
   let tx = 0;
   let drop = 0;
   if (session) {
-    for (const frame of session.frames) {
-      if (frame.dir === "RX") rx += frame.bytes.length;
-      else tx += frame.bytes.length;
-    }
-    drop = session.counters?.rxDiscardedBytes ?? 0;
+    const counters = session.counters || {};
+    rx = counters.rxBytes ?? 0;
+    tx = counters.txBytes ?? 0;
+    drop = counters.rxDiscardedBytes ?? 0;
   }
   $("#assistant-counters").textContent = `RX ${rx} / TX ${tx} / DROP ${drop}`;
   $("#assistant-rx").textContent = String(rx);
   $("#assistant-tx").textContent = String(tx);
   $("#assistant-drop").textContent = String(drop);
+}
+
+function scheduleStatsRefresh() {
+  if (!state.session) return;
+  clearTimeout(state.statsTimer);
+  state.statsTimer = setTimeout(() => {
+    const session = state.session;
+    if (session && session.mgmt.connected) {
+      session.mgmt.refreshSessions().catch(() => {});
+    }
+  }, 100);
 }
 
 function updateRate() {
@@ -541,6 +552,7 @@ function sendBytes(bytes) {
   const checksum = $("#assistant-checksum").value;
   const finalBytes = withChecksum(bytes, checksum);
   state.session.sendBytes(finalBytes);
+  scheduleStatsRefresh();
   return finalBytes.length;
 }
 
@@ -742,7 +754,16 @@ async function main() {
   });
   client.onSync(() => {
     renderPorts(client.ports);
-    renderSessionState(client);
+    if (state.session) {
+      const info = (client.sessions || []).find((s) => s.sessionId === state.session.sessionId);
+      if (info) {
+        state.session.updateInfo(info);
+      } else {
+        renderSessionState(client);
+      }
+    } else {
+      renderSessionState(client);
+    }
   });
   client.onEvent((name, data) => {
     if (name === "ports.changed") {
@@ -758,6 +779,11 @@ async function main() {
   });
 
   setInterval(updateRate, 500);
+  setInterval(() => {
+    if (state.session && client.connected && !document.hidden) {
+      client.refreshSessions().catch(() => {});
+    }
+  }, 1000);
   client.connect();
   renderSessionState(client);
   renderAll();

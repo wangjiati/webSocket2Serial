@@ -282,6 +282,18 @@ async fn removed_assistant_js_returns_404() {
     svc.shutdown().await;
 }
 
+/// 助手统计必须使用服务端权威 counters，而不是会被 4 MiB 上限裁剪的 frames。
+#[test]
+fn assistant_uses_authoritative_counters() {
+    let js = include_str!("../src/assets/js/assistant-page.js");
+    assert!(js.contains("counters.rxBytes"), "RX 应取服务端 counters");
+    assert!(js.contains("counters.txBytes"), "TX 应取服务端 counters");
+    assert!(
+        js.contains("client.refreshSessions"),
+        "助手应定期刷新会话计数"
+    );
+}
+
 /// `/js/*` 由 HTTP 管理服务静态分发，且内容非空、Content-Type 正确。
 #[tokio::test]
 async fn serves_js_assets() {
