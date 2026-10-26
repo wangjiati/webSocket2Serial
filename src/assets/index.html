@@ -17,6 +17,19 @@
     </header>
 
     <main>
+      <div class="entry-grid">
+        <a id="entry-assistant" class="entry-card" href="/assistant" target="_blank" rel="noopener">
+          <strong>串口助手</strong>
+          <span>自己选择并打开串口，适合日常人工收发、调试和发指令。</span>
+          <em>在新标签打开 ↗</em>
+        </a>
+        <a id="entry-test" class="entry-card" href="/test" target="_blank" rel="noopener">
+          <strong>功能测试</strong>
+          <span>协议动作、事件、错误码、宽限重连与一键完整演示。</span>
+          <em>在新标签打开 ↗</em>
+        </a>
+      </div>
+
       <section id="overview">
         <h2>概览</h2>
 
@@ -37,6 +50,10 @@
             </label>
             <span id="admin-note" class="muted"></span>
           </div>
+          <div class="info-item">
+            <span class="label">开机自启</span>
+            <span id="autostart">—</span>
+          </div>
         </div>
 
         <h3>串口</h3>
@@ -50,6 +67,7 @@
                 <th>产品</th>
                 <th>序列号</th>
                 <th>类型</th>
+                <th>操作</th>
               </tr>
             </thead>
             <tbody id="ports-body"></tbody>
@@ -65,6 +83,7 @@
                 <th>状态</th>
                 <th>串口 / 参数</th>
                 <th>RX / TX</th>
+                <th>DROP</th>
                 <th>最近断线</th>
                 <th>最近错误</th>
                 <th></th>
@@ -75,6 +94,64 @@
         </div>
       </section>
 
+      <section id="help" class="help">
+        <h2>帮助文档</h2>
+
+        <details open>
+          <summary>快速开始</summary>
+          <ol>
+            <li>在管理页「串口」表确认当前机器识别到的串口。</li>
+            <li>点「串口助手」或端口行的「用助手打开」，在新标签选择参数并打开串口。</li>
+            <li>在助手页发送文本或 HEX，接收区查看设备返回；需要协议/边界验证时打开「功能测试」。</li>
+            <li>调试结束后点「关闭串口」立即释放端口，再关闭标签页。</li>
+          </ol>
+        </details>
+
+        <details>
+          <summary>三个页面分别做什么</summary>
+          <ul>
+            <li><strong>管理页</strong>：服务状态、串口列表、会话监控、帮助文档。</li>
+            <li><strong>串口助手</strong>：自己打开/关闭一个串口，做日常人工收发与调试；多个串口请开多个标签页。</li>
+            <li><strong>功能测试</strong>：协议动作、事件、错误码、宽限重连与一键完整演示。</li>
+          </ul>
+        </details>
+
+        <details>
+          <summary>串口参数</summary>
+          <p>波特率、数据位、校验、停止位、流控和 DTR/RTS 必须与设备一致。不确定时先用 115200 8N1、无流控。</p>
+        </details>
+
+        <details>
+          <summary>串口占用与宽限</summary>
+          <p>
+            同一串口同时只允许一个数据客户端。若助手页提示 <code>PORT_BUSY</code>，请先在管理页「会话」表关闭占用会话，
+            或关闭其他串口程序。直接关闭助手标签页不会立刻释放串口，会进入 10 秒宽限；建议先点「关闭串口」。
+          </p>
+        </details>
+
+        <details>
+          <summary>常见错误码</summary>
+          <ul>
+            <li><code>PORT_BUSY</code>：串口被其他会话或程序占用。</li>
+            <li><code>PORT_NOT_FOUND</code>：串口不存在或已拔出。</li>
+            <li><code>SESSION_STATE</code>：会话状态不允许该操作（例如非 active 写入）。</li>
+            <li>数据 WS close：4002 第二客户端、4004 管理端关闭、4005 接收背压、4007 写停滞、1003 文本帧、1009 超大帧。</li>
+          </ul>
+        </details>
+
+        <details>
+          <summary>与浏览器 Web Serial 的区别</summary>
+          <p>
+            本工具通过本机 WebSocket2Serial 透传服务访问串口，不需要浏览器 Web Serial 授权弹窗；
+            因此页面必须从 <code>http://127.0.0.1:8766</code> 打开，且串口仍受“同一串口一个数据客户端”的限制。
+          </p>
+        </details>
+
+        <details>
+          <summary>管理服务关闭后怎么恢复</summary>
+          <p>管理页关闭只影响 8766 的 HTTP 页面，不影响管理 WS 与已打开的数据 WS。可从托盘菜单重新开启，或用 <code>--admin</code> 启动参数强制开启。</p>
+        </details>
+      </section>
     </main>
 
     <script type="module" src="/js/main.js"></script>

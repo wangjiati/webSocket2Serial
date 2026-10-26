@@ -13,6 +13,7 @@ export function bindOverview(root, client, state) {
   const copyBtn = root.querySelector("#copy-url");
   const toggle = root.querySelector("#admin-toggle");
   const adminNote = root.querySelector("#admin-note");
+  const autostartEl = root.querySelector("#autostart");
   const portsBody = root.querySelector("#ports-body");
   const sessionsBody = root.querySelector("#sessions-body");
   const connStatus = document.getElementById("conn-status");
@@ -33,6 +34,13 @@ export function bindOverview(root, client, state) {
     renderPorts();
     renderSessions();
   });
+
+  // 管理页只做监控：每 2 秒刷新一次会话计数，页面隐藏时暂停。
+  setInterval(() => {
+    if (!document.hidden) {
+      client.refreshSessions();
+    }
+  }, 2000);
 
   copyBtn.addEventListener("click", async () => {
     const url = client.admin && client.admin.url ? client.admin.url : adminUrlEl.textContent;
@@ -85,13 +93,17 @@ export function bindOverview(root, client, state) {
       adminNote.textContent = admin.enabled ? "" : "已关闭：刷新后无法访问";
       adminNote.className = "muted" + (admin.enabled ? "" : " warn");
     }
+    const autostart = client.hello?.autostart ?? state?.config?.autostart;
+    if (autostartEl) {
+      autostartEl.textContent = autostart == null ? "—" : `${autostart ? "开启" : "关闭"}（只读）`;
+    }
   }
 
   function renderPorts() {
     const ports = client.ports || [];
     portsBody.textContent = "";
     if (ports.length === 0) {
-      portsBody.appendChild(emptyRow(6, "未发现串口"));
+      portsBody.appendChild(emptyRow(7, "未发现串口"));
       return;
     }
     for (const p of ports) {
@@ -102,6 +114,14 @@ export function bindOverview(root, client, state) {
       tr.appendChild(td(p.product || "—"));
       tr.appendChild(td(p.serialNumber || "—"));
       tr.appendChild(td(p.portType || "—"));
+      const action = document.createElement("td");
+      const link = document.createElement("a");
+      link.href = `/assistant?port=${encodeURIComponent(p.path)}`;
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.textContent = "用助手打开";
+      action.appendChild(link);
+      tr.appendChild(action);
       portsBody.appendChild(tr);
     }
   }
@@ -110,7 +130,7 @@ export function bindOverview(root, client, state) {
     const sessions = client.sessions || [];
     sessionsBody.textContent = "";
     if (sessions.length === 0) {
-      sessionsBody.appendChild(emptyRow(7, "无活动会话"));
+      sessionsBody.appendChild(emptyRow(8, "无活动会话"));
       return;
     }
     for (const s of sessions) {
@@ -119,6 +139,7 @@ export function bindOverview(root, client, state) {
       tr.appendChild(td(STATE_LABELS[s.state] || s.state));
       tr.appendChild(td(`${s.port} · ${formatParams(s.params)}`));
       tr.appendChild(td(`${s.counters.rxBytes} / ${s.counters.txBytes}`));
+      tr.appendChild(td(String(s.counters.rxDiscardedBytes ?? 0)));
       tr.appendChild(td(formatGap(s.lastGap)));
       tr.appendChild(td(formatError(s.lastError)));
       const closeBtn = document.createElement("button");

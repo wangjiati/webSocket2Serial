@@ -36,6 +36,22 @@ fn index_page_links_open_new_tabs() {
     assert!(api.contains("reconnect"));
 }
 
+/// 管理页入口卡片、自启状态、会话 DROP 与帮助文档。
+#[test]
+fn admin_help_and_monitor_controls() {
+    let html = include_str!("../src/assets/index.html");
+    for id in ["help", "autostart", "entry-assistant", "entry-test"] {
+        assert!(html.contains(&format!("id=\"{id}\"")), "missing {id}");
+    }
+    assert!(html.contains("PORT_BUSY"));
+    assert!(html.contains("10 秒"));
+    assert!(html.contains("Web Serial"));
+    assert!(html.contains("<th>DROP</th>"));
+    let js = include_str!("../src/assets/js/overview.js");
+    assert!(js.contains("/assistant?port="), "端口行应能打开助手");
+    assert!(js.contains("refreshSessions"), "管理页应轮询会话");
+}
+
 /// 功能测试页保留现有演示 DOM 与 7 个子 tab。
 #[test]
 fn test_page_has_demo_controls() {
