@@ -79,6 +79,65 @@ fn admin_html_ids_are_unique() {
     assert_eq!(before, ids.len(), "index.html 存在重复 id");
 }
 
+/// 助手页：固定提示、连接/收发/导出控制点。
+#[test]
+fn assistant_page_has_notice_and_controls() {
+    let html = include_str!("../src/assets/assistant.html");
+    for id in [
+        "assistant-page",
+        "assistant-notice",
+        "assistant-port",
+        "assistant-port-list",
+        "assistant-baud",
+        "assistant-databits",
+        "assistant-parity",
+        "assistant-stopbits",
+        "assistant-flowcontrol",
+        "assistant-dtr",
+        "assistant-rts",
+        "assistant-open",
+        "assistant-close",
+        "assistant-open-result",
+        "assistant-counters",
+        "assistant-last-error",
+        "assistant-state",
+        "assistant-log",
+        "assistant-pause",
+        "assistant-clear",
+        "assistant-autoscroll",
+        "assistant-ts",
+        "assistant-format",
+        "assistant-export",
+        "assistant-buffer-note",
+        "assistant-send-mode",
+        "assistant-send-eol",
+        "assistant-send-input",
+        "assistant-send-btn",
+        "assistant-send-status",
+    ] {
+        assert!(html.contains(&format!("id=\"{id}\"")), "missing {id}");
+    }
+    assert!(html.contains("WebSocket2Serial"));
+    assert!(html.contains("Web Serial"));
+    assert!(html.contains("PORT_BUSY"));
+    assert!(!html.contains("cdn."));
+}
+
+/// `/assistant` 返回独立页面。
+#[tokio::test]
+async fn serves_assistant_page() {
+    let svc = AdminService::start(0, 8765).await.unwrap();
+    let resp = client()
+        .get(format!("{}/assistant", svc.url()))
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.status().is_success(), "/assistant 未返回成功");
+    let html = resp.text().await.unwrap();
+    assert!(html.contains("串口助手"));
+    svc.shutdown().await;
+}
+
 /// 演示模块必须使用共享的 ManagementClient 契约（request 直接返回 data）。
 #[test]
 fn demo_module_uses_shared_client_contract() {
@@ -116,6 +175,7 @@ async fn serves_js_assets() {
         "demo.js",
         "format.js",
         "serial.js",
+        "assistant-page.js",
     ] {
         let resp = client()
             .get(format!("{}/js/{path}", svc.url()))

@@ -27,6 +27,8 @@ use crate::protocol::AdminState;
 
 /// 内嵌的首页。
 const INDEX_HTML: &str = include_str!("../assets/index.html");
+/// 内嵌的串口助手页。
+const ASSISTANT_HTML: &str = include_str!("../assets/assistant.html");
 /// 内嵌的样式。
 const STYLE_CSS: &str = include_str!("../assets/style.css");
 /// 内嵌的 JS 模块（任务 13）。
@@ -37,6 +39,7 @@ const JS_MAIN: &str = include_str!("../assets/js/main.js");
 const JS_DEMO: &str = include_str!("../assets/js/demo.js");
 const JS_FORMAT: &str = include_str!("../assets/js/format.js");
 const JS_SERIAL: &str = include_str!("../assets/js/serial.js");
+const JS_ASSISTANT_PAGE: &str = include_str!("../assets/js/assistant-page.js");
 
 /// 管理页服务：可运行时开关的本地 HTTP 服务。
 pub struct AdminService {
@@ -227,6 +230,7 @@ fn build_router(management_port: u16, autostart: Arc<AtomicBool>, url: String) -
     });
     Router::new()
         .route("/", get(index))
+        .route("/assistant", get(assistant))
         .route("/style.css", get(style))
         .route("/js/*path", get(js))
         .route("/api/config", get(config))
@@ -235,6 +239,10 @@ fn build_router(management_port: u16, autostart: Arc<AtomicBool>, url: String) -
 
 async fn index() -> Html<&'static str> {
     Html(INDEX_HTML)
+}
+
+async fn assistant() -> Html<&'static str> {
+    Html(ASSISTANT_HTML)
 }
 
 async fn style() -> impl IntoResponse {
@@ -254,6 +262,7 @@ async fn js(Path(path): Path<String>) -> Result<impl IntoResponse, StatusCode> {
         "demo.js" => ("text/javascript; charset=utf-8", JS_DEMO),
         "format.js" => ("text/javascript; charset=utf-8", JS_FORMAT),
         "serial.js" => ("text/javascript; charset=utf-8", JS_SERIAL),
+        "assistant-page.js" => ("text/javascript; charset=utf-8", JS_ASSISTANT_PAGE),
         _ => return Err(StatusCode::NOT_FOUND),
     };
     Ok(([(header::CONTENT_TYPE, content_type)], body))

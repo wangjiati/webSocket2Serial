@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WebSocket2Serial 串口助手</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header class="page-header">
+      <h1>串口助手</h1>
+      <span id="assistant-state" class="badge waiting">未连接</span>
+      <nav class="page-links">
+        <a href="/">← 返回管理页</a>
+        <a href="/test" target="_blank" rel="noopener">功能测试 ↗</a>
+      </nav>
+    </header>
+
+    <main id="assistant-page">
+      <div id="assistant-notice" class="assistant-notice">
+        本页通过 WebSocket2Serial 透传工具访问串口，不是浏览器 Web Serial。同一串口同时只允许一个数据客户端；
+        若提示 PORT_BUSY，请先在管理页关闭占用会话，或关闭其他串口程序。
+      </div>
+
+      <section class="card assistant-connection">
+        <h2>连接</h2>
+        <div class="assistant-form">
+          <label class="field wide">
+            <span>串口</span>
+            <input id="assistant-port" type="text" list="assistant-port-list" placeholder="选择或输入串口" />
+          </label>
+          <datalist id="assistant-port-list"></datalist>
+          <label class="field">
+            <span>波特率</span>
+            <input id="assistant-baud" type="number" value="115200" min="1" />
+          </label>
+          <label class="field">
+            <span>数据位</span>
+            <select id="assistant-databits">
+              <option>8</option>
+              <option>7</option>
+              <option>6</option>
+              <option>5</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>校验</span>
+            <select id="assistant-parity">
+              <option value="none">none</option>
+              <option value="odd">odd</option>
+              <option value="even">even</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>停止位</span>
+            <select id="assistant-stopbits">
+              <option>1</option>
+              <option>2</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>流控</span>
+            <select id="assistant-flowcontrol">
+              <option value="none">none</option>
+              <option value="software">software</option>
+              <option value="hardware">hardware</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>DTR</span>
+            <select id="assistant-dtr">
+              <option value="default">默认</option>
+              <option value="true">高</option>
+              <option value="false">低</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>RTS</span>
+            <select id="assistant-rts">
+              <option value="default">默认</option>
+              <option value="true">高</option>
+              <option value="false">低</option>
+            </select>
+          </label>
+        </div>
+        <div class="assistant-actions">
+          <button id="assistant-open" type="button" class="primary">打开串口</button>
+          <button id="assistant-close" type="button" disabled>关闭串口</button>
+          <button id="assistant-reconnect" type="button" disabled>重新连接</button>
+          <span id="assistant-open-result" class="muted"></span>
+        </div>
+        <div class="assistant-meta">
+          <span id="assistant-counters">RX 0 / TX 0 / DROP 0</span>
+          <span id="assistant-last-error" class="muted"></span>
+        </div>
+      </section>
+
+      <div class="assistant-main">
+        <section class="card assistant-log-card">
+          <div class="assistant-toolbar">
+            <label class="inline"><input id="assistant-ts" type="checkbox" checked /> 时间戳</label>
+            <label class="inline">
+              显示
+              <select id="assistant-format">
+                <option value="ascii">ASCII</option>
+                <option value="hex">HEX</option>
+              </select>
+            </label>
+            <label class="inline"><input id="assistant-autoscroll" type="checkbox" checked /> 自动滚动</label>
+            <button id="assistant-pause" type="button">暂停</button>
+            <button id="assistant-clear" type="button">清空</button>
+            <button id="assistant-export" type="button">导出</button>
+          </div>
+          <div id="assistant-buffer-note" class="assistant-buffer-note" hidden></div>
+          <div id="assistant-log" class="assistant-log" aria-label="串口收发日志"></div>
+        </section>
+
+        <section class="card assistant-send-card">
+          <h2>发送</h2>
+          <div class="assistant-send-options">
+            <label class="field">
+              <span>模式</span>
+              <select id="assistant-send-mode">
+                <option value="text">文本</option>
+                <option value="hex">HEX</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>行尾</span>
+              <select id="assistant-send-eol">
+                <option value="none">无</option>
+                <option value="crlf">CRLF</option>
+                <option value="lf">LF</option>
+                <option value="cr">CR</option>
+              </select>
+            </label>
+          </div>
+          <textarea id="assistant-send-input" rows="5" placeholder="输入要发送的内容；Ctrl+Enter 发送"></textarea>
+          <div class="assistant-send-actions">
+            <button id="assistant-send-btn" type="button" class="primary" disabled>发送</button>
+            <span id="assistant-send-status" class="status"></span>
+          </div>
+          <p class="assistant-hint">文本按 UTF-8 发送；GBK/二进制数据请用 HEX。</p>
+        </section>
+      </div>
+    </main>
+
+    <script type="module" src="/js/assistant-page.js"></script>
+  </body>
+</html>
