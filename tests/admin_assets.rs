@@ -86,6 +86,18 @@ fn demo_module_uses_shared_client_contract() {
     assert!(js.contains("function renderTerminal"), "缺少终端渲染实现");
     assert!(js.contains("function openSlot"), "缺少会话打开实现");
     assert!(
+        js.contains("from \"./format.js\""),
+        "demo.js 应复用 format.js"
+    );
+    assert!(
+        js.contains("from \"./serial.js\""),
+        "demo.js 应复用 serial.js"
+    );
+    assert!(
+        !js.contains("class SessionController"),
+        "会话控制器应移到 serial.js"
+    );
+    assert!(
         !js.contains("class ManagementClient"),
         "演示模块不得自带管理客户端"
     );
@@ -102,6 +114,8 @@ async fn serves_js_assets() {
         "assistant.js",
         "main.js",
         "demo.js",
+        "format.js",
+        "serial.js",
     ] {
         let resp = client()
             .get(format!("{}/js/{path}", svc.url()))
