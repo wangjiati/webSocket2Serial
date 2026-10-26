@@ -85,7 +85,10 @@ fn demo_module_uses_shared_client_contract() {
     let js = include_str!("../src/assets/js/demo.js");
     assert!(js.contains("function renderTerminal"), "缺少终端渲染实现");
     assert!(js.contains("function openSlot"), "缺少会话打开实现");
-    assert!(!js.contains("class ManagementClient"), "演示模块不得自带管理客户端");
+    assert!(
+        !js.contains("class ManagementClient"),
+        "演示模块不得自带管理客户端"
+    );
     assert!(!js.contains("r.data"), "request() 已直接返回 data");
 }
 
@@ -93,7 +96,13 @@ fn demo_module_uses_shared_client_contract() {
 #[tokio::test]
 async fn serves_js_assets() {
     let svc = AdminService::start(0, 8765).await.unwrap();
-    for path in ["api.js", "overview.js", "assistant.js", "main.js", "demo.js"] {
+    for path in [
+        "api.js",
+        "overview.js",
+        "assistant.js",
+        "main.js",
+        "demo.js",
+    ] {
         let resp = client()
             .get(format!("{}/js/{path}", svc.url()))
             .send()
