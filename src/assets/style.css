@@ -1402,3 +1402,91 @@ button.active {
 #assistant-page .assistant-actions a {
   color: var(--accent);
 }
+
+#assistant-page .assistant-stats {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+#assistant-page .assistant-stats b {
+  color: var(--text);
+  font-family: var(--mono);
+  font-weight: 600;
+}
+
+#assistant-page .assistant-timer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+#assistant-page .assistant-timer input {
+  width: 96px;
+}
+
+#assistant-page .assistant-commands {
+  margin-top: 14px;
+}
+
+#assistant-page .assistant-command-form {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(180px, 2fr) 100px 110px auto;
+  gap: 8px;
+  align-items: center;
+}
+
+#assistant-page .assistant-command-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+#assistant-page .assistant-command-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: #fafbfc;
+  font-size: 12px;
+}
+
+#assistant-page .assistant-command-row .cmd-name {
+  font-weight: 600;
+}
+
+#assistant-page .assistant-command-row .cmd-meta {
+  color: var(--muted);
+}
+
+#assistant-page .assistant-command-row .cmd-payload {
+  flex: 1;
+  min-width: 120px;
+  font-family: var(--mono);
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#assistant-page .assistant-command-row .cmd-actions {
+  display: flex;
+  gap: 6px;
+}
+
+@media (max-width: 900px) {
+  #assistant-page .assistant-command-form {
+    grid-template-columns: 1fr 1fr;
+  }
+}

@@ -93,6 +93,12 @@
           <span id="assistant-counters">RX 0 / TX 0 / DROP 0</span>
           <span id="assistant-last-error" class="muted"></span>
         </div>
+        <div class="assistant-stats">
+          <span>RX <b id="assistant-rx">0</b> B</span>
+          <span>TX <b id="assistant-tx">0</b> B</span>
+          <span>速率 <b id="assistant-rate">0</b> B/s</span>
+          <span>DROP <b id="assistant-drop">0</b> B</span>
+        </div>
       </section>
 
       <div class="assistant-main">
@@ -102,8 +108,15 @@
             <label class="inline">
               显示
               <select id="assistant-format">
-                <option value="ascii">ASCII</option>
+                <option value="ascii">文本</option>
                 <option value="hex">HEX</option>
+              </select>
+            </label>
+            <label class="inline">
+              编码
+              <select id="assistant-encoding">
+                <option value="utf-8">UTF-8</option>
+                <option value="gbk">GBK</option>
               </select>
             </label>
             <label class="inline"><input id="assistant-autoscroll" type="checkbox" checked /> 自动滚动</label>
@@ -134,15 +147,57 @@
                 <option value="cr">CR</option>
               </select>
             </label>
+            <label class="field">
+              <span>校验和</span>
+              <select id="assistant-checksum">
+                <option value="none">无</option>
+                <option value="sum8">Sum8</option>
+                <option value="xor8">XOR8</option>
+                <option value="crc16">CRC16-Modbus</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>发送历史</span>
+              <select id="assistant-history">
+                <option value="">选择历史…</option>
+              </select>
+            </label>
           </div>
           <textarea id="assistant-send-input" rows="5" placeholder="输入要发送的内容；Ctrl+Enter 发送"></textarea>
           <div class="assistant-send-actions">
             <button id="assistant-send-btn" type="button" class="primary" disabled>发送</button>
+            <button id="assistant-timer-start" type="button">开始定时</button>
+            <button id="assistant-timer-stop" type="button" disabled>停止定时</button>
             <span id="assistant-send-status" class="status"></span>
+          </div>
+          <div class="assistant-timer">
+            <label class="inline">间隔(ms) <input id="assistant-timer-interval" type="number" value="1000" min="10" /></label>
+            <label class="inline">次数(0=无限) <input id="assistant-timer-count" type="number" value="0" min="0" /></label>
+            <span id="assistant-timer-status" class="muted">定时未运行</span>
           </div>
           <p class="assistant-hint">文本按 UTF-8 发送；GBK/二进制数据请用 HEX。</p>
         </section>
       </div>
+
+      <section class="card assistant-commands">
+        <h2>快捷指令</h2>
+        <div class="assistant-command-form">
+          <input id="assistant-cmd-name" type="text" placeholder="名称（可选）" />
+          <input id="assistant-cmd-payload" type="text" placeholder="指令内容" />
+          <select id="assistant-cmd-mode">
+            <option value="text">文本</option>
+            <option value="hex">HEX</option>
+          </select>
+          <select id="assistant-cmd-eol">
+            <option value="none">无行尾</option>
+            <option value="crlf">CRLF</option>
+            <option value="lf">LF</option>
+            <option value="cr">CR</option>
+          </select>
+          <button id="assistant-cmd-save" type="button" class="primary">保存</button>
+        </div>
+        <div id="assistant-cmd-list" class="assistant-command-list"></div>
+      </section>
     </main>
 
     <script type="module" src="/js/assistant-page.js"></script>
