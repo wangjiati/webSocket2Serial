@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WebSocket2Serial 功能测试</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header class="page-header">
+      <h1>功能测试</h1>
+      <nav class="page-links">
+        <a href="/">← 返回管理页</a>
+        <a href="/assistant" target="_blank" rel="noopener">串口助手 ↗</a>
+      </nav>
+    </header>
+
+    <main>
+    <section id="demo" class="demo-root">
+        <div id="demo-statusbar" class="demo-statusbar">
+          <span id="demo-pill-mgmt" class="demo-pill">管理 WS：未连接</span>
+          <span id="demo-pill-version" class="demo-pill">版本：-</span>
+          <span id="demo-pill-admin" class="demo-pill">管理页：-</span>
+          <span id="demo-pill-autostart" class="demo-pill">自启：-</span>
+        </div>
+        <div id="demo-banner" class="demo-banner hidden"></div>
+        <nav id="demo-tabs" class="demo-tabs" role="tablist" aria-label="功能演示">
+          <button type="button" role="tab" data-demo-tab="overview" aria-selected="true" aria-controls="demo-tab-overview" class="active">演示概览</button>
+          <button type="button" role="tab" data-demo-tab="ports" aria-selected="false" aria-controls="demo-tab-ports" tabindex="-1">端口</button>
+          <button type="button" role="tab" data-demo-tab="sessions" aria-selected="false" aria-controls="demo-tab-sessions" tabindex="-1">会话</button>
+          <button type="button" role="tab" data-demo-tab="terminal" aria-selected="false" aria-controls="demo-tab-terminal" tabindex="-1">双端口终端</button>
+          <button type="button" role="tab" data-demo-tab="debug" aria-selected="false" aria-controls="demo-tab-debug" tabindex="-1">调试</button>
+          <button type="button" role="tab" data-demo-tab="edge" aria-selected="false" aria-controls="demo-tab-edge" tabindex="-1">边界自检</button>
+          <button type="button" role="tab" data-demo-tab="events" aria-selected="false" aria-controls="demo-tab-events" tabindex="-1">事件日志</button>
+        </nav>
+        <!-- 概览 -->
+        <section id="demo-tab-overview" class="demo-panel active">
+          <div class="grid cols-2" style="margin-bottom:14px">
+            <div class="card">
+              <h2>连接信息</h2>
+              <div class="kv" id="demo-hello-info">
+                <div class="k">页面 Origin</div><div class="v mono-ellipsis" id="demo-page-origin">-</div>
+                <div class="k">管理 WebSocket</div><div class="v mono-ellipsis" id="demo-mgmt-url">-</div>
+                <div class="k">协议</div><div class="v" id="demo-hello-protocol">-</div>
+                <div class="k">工具版本</div><div class="v" id="demo-hello-version">-</div>
+                <div class="k">操作系统</div><div class="v" id="demo-hello-os">-</div>
+                <div class="k">管理页</div><div class="v" id="demo-hello-admin">-</div>
+                <div class="k">开机自启</div><div class="v" id="demo-hello-autostart">-（只读，托盘菜单修改）</div>
+                <div class="k">当前会话</div><div class="v" id="demo-hello-sessions">-</div>
+              </div>
+              <div class="row" style="margin-top:12px">
+                <button class="btn ghost" id="demo-btn-refresh-all">刷新端口/会话</button>
+              </div>
+            </div>
+            <div class="card">
+              <h2>一键完整演示</h2>
+              <p class="hint">自动选择两个不同串口（也可先在「会话」子 tab 指定），依次演示端口、双端口回环、调试、错误码和宽限重连。不硬编码任何 COM。</p>
+              <div class="row" style="margin:10px 0">
+                <button class="btn primary" id="demo-btn-run-demo">开始完整演示</button>
+                <span class="badge" id="demo-runner-status">未运行</span>
+                <span class="badge" id="demo-runner-count">0 / 0</span>
+              </div>
+              <ol class="runner-steps" id="demo-runner-steps"></ol>
+            </div>
+          </div>
+          <div class="grid cols-3">
+            <div class="card">
+              <h3>快速开始</h3>
+              <div class="small muted" style="display:flex;flex-direction:column;gap:5px">
+                <div>1. 在「端口」子 tab 确认当前机器的串口</div>
+                <div>2. 在「会话」子 tab 选择参数并打开 A/B</div>
+                <div>3. 在「双端口终端」验证双向收发</div>
+                <div>4. 若 A/B 是互连的一对串口，点击「开始完整演示」</div>
+              </div>
+            </div>
+            <div class="card">
+              <h3>功能演示覆盖</h3>
+              <div class="small muted" style="display:flex;flex-direction:column;gap:4px">
+                <div>管理动作：ports.list / session.open / session.close / session.list / session.write / debug.subscribe（admin.set 在概览页）</div>
+                <div>事件：hello / ports.changed / session.state / debug.frame / admin.state</div>
+                <div>数据面：二进制、文本/HEX、close code、grace、lastGap</div>
+                <div>边界：4002 / PORT_BUSY / PORT_NOT_FOUND / SESSION_STATE / UNKNOWN_ACTION / 1003 / 1009</div>
+              </div>
+            </div>
+            <div class="card">
+              <h3>注意</h3>
+              <div class="small muted" style="display:flex;flex-direction:column;gap:4px">
+                <div>托盘/开机自启只能读取状态，不能从网页控制。</div>
+                <div>浏览器不暴露握手 HTTP 404，错误 token 会显示为握手失败/close 1006。</div>
+                <div>浏览器不能发送 close 1001；异常断开用 3001 模拟，服务端统一进入 grace。</div>
+                <div>本页由桥接工具内嵌提供，管理端口自动读取，无需手动连接。</div>
+                <div>虚拟串口对在大块全双工下可能丢字节；一键演示使用 4KB 小块。</div>
+              </div>
+            </div>
+          </div>
+        </section>
+        <!-- 端口 -->
+        <section id="demo-tab-ports" class="demo-panel">
+          <div class="card" style="margin-bottom:14px">
+            <h2>串口列表 <span class="badge" id="demo-ports-count">0</span></h2>
+            <div class="row">
+              <button class="btn primary" id="demo-btn-refresh-ports">重新扫描</button>
+              <span class="muted small">热插拔由管理 WS 的 ports.changed 事件实时推送；也可以手动刷新。</span>
+            </div>
+            <datalist id="demo-port-list"></datalist>
+            <div class="table-wrap" style="margin-top:10px">
+              <table>
+                <thead><tr><th>Path</th><th>类型</th><th>厂商</th><th>产品</th><th>序列号</th><th>VID/PID</th><th>操作</th></tr></thead>
+                <tbody id="demo-ports-body"></tbody>
+              </table>
+            </div>
+            <div class="empty" id="demo-ports-empty">暂无串口</div>
+          </div>
+        </section>
+        <!-- 会话 -->
+        <section id="demo-tab-sessions" class="demo-panel">
+          <div class="card" style="margin-bottom:14px">
+            <h2>打开串口</h2>
+            <div class="form-grid">
+              <div class="field wide"><label for="demo-path-A">A 串口</label><input id="demo-path-A" type="text" list="demo-port-list" placeholder="选择或输入 A 串口" /></div>
+              <div class="field wide"><label for="demo-path-B">B 串口</label><input id="demo-path-B" type="text" list="demo-port-list" placeholder="选择或输入 B 串口" /></div>
+              <div class="field"><label for="demo-baud">波特率</label><input id="demo-baud" type="number" value="115200" min="1" /></div>
+              <div class="field"><label for="demo-databits">数据位</label><select id="demo-databits"><option>8</option><option>7</option><option>6</option><option>5</option></select></div>
+              <div class="field"><label for="demo-parity">校验</label><select id="demo-parity"><option value="none">none</option><option value="odd">odd</option><option value="even">even</option></select></div>
+              <div class="field"><label for="demo-stopbits">停止位</label><select id="demo-stopbits"><option>1</option><option>2</option></select></div>
+              <div class="field"><label for="demo-flowcontrol">流控</label><select id="demo-flowcontrol"><option value="none">none</option><option value="software">software</option><option value="hardware">hardware</option></select></div>
+              <div class="field"><label for="demo-dtr">DTR 初值</label><select id="demo-dtr"><option value="default">默认</option><option value="true">高</option><option value="false">低</option></select></div>
+              <div class="field"><label for="demo-rts">RTS 初值</label><select id="demo-rts"><option value="default">默认</option><option value="true">高</option><option value="false">低</option></select></div>
+            </div>
+            <div class="row" style="margin-top:10px">
+              <button class="btn primary" id="demo-btn-open-a">打开 A</button>
+              <button class="btn primary" id="demo-btn-open-b">打开 B</button>
+              <button class="btn ghost" id="demo-btn-close-a">关闭 A</button>
+              <button class="btn ghost" id="demo-btn-close-b">关闭 B</button>
+              <span class="muted small" id="demo-open-result"></span>
+            </div>
+            <p class="hint">A/B 可以不同参数？当前表单共用参数，只有串口路径分开。若要测不同波特率，先关闭一个再改参数打开另一个。</p>
+          </div>
+          <div class="card">
+            <h2>当前会话 <span class="badge" id="demo-sessions-count">0</span></h2>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>槽</th><th>串口</th><th>状态</th><th>参数</th><th>RX / TX / DROP</th><th>Last Gap</th><th>最近错误</th><th>操作</th></tr></thead>
+                <tbody id="demo-sessions-body"></tbody>
+              </table>
+            </div>
+            <div class="empty" id="demo-sessions-empty">暂无会话</div>
+          </div>
+        </section>
+        <!-- 终端 -->
+        <section id="demo-tab-terminal" class="demo-panel">
+          <div class="card" style="margin-bottom:14px">
+            <h2>双端口终端</h2>
+            <div class="row">
+              <button class="btn good" id="demo-btn-loop-ab">A → B 回环 4KB</button>
+              <button class="btn good" id="demo-btn-loop-ba">B → A 回环 4KB</button>
+              <span class="muted small" id="demo-loop-result">要求 A/B 是互连的一对串口</span>
+              <label class="check"><input type="checkbox" id="demo-auto-reconnect" /> 异常断线后自动重连</label>
+            </div>
+          </div>
+          <div class="terminal-grid">
+            <div class="term-pane" data-slot="A">
+              <div class="term-head">
+                <span class="badge slot-a">A</span><span class="port" id="demo-term-port-A">未打开</span>
+                <span class="badge" id="demo-term-state-A">-</span><span class="spacer"></span>
+                <span class="mono-ellipsis muted tiny" id="demo-term-sid-A"></span>
+              </div>
+              <div class="term-meta">
+                <span id="demo-term-counters-A">RX 0 / TX 0 / DROP 0</span>
+                <span id="demo-term-close-A"></span>
+                <span id="demo-term-grace-A"></span>
+              </div>
+              <div class="term-tools">
+                <label class="check"><input type="checkbox" id="demo-hex-A" checked /> HEX</label>
+                <label class="check"><input type="checkbox" id="demo-ts-A" checked /> 时间戳</label>
+                <label class="check"><input type="checkbox" id="demo-autoscroll-A" checked /> 自动滚动</label>
+                <label class="check"><input type="checkbox" id="demo-paused-A" /> 暂停</label>
+                <button class="btn small ghost" data-term="clear" data-slot="A">清空</button>
+                <button class="btn small ghost" data-term="export" data-slot="A">导出</button>
+                <button class="btn small warn" data-term="reconnect" data-slot="A">宽限重连</button>
+                <button class="btn small danger" data-term="abnormal" data-slot="A">模拟异常断开 (3001)</button>
+                <button class="btn small danger" data-term="close" data-slot="A">正常关闭 1000</button>
+              </div>
+              <div class="term-log" id="demo-log-A"></div>
+              <div class="term-send">
+                <select id="demo-sendmode-A" style="width:74px"><option value="text">文本</option><option value="hex">HEX</option></select>
+                <input id="demo-send-A" type="text" placeholder="输入要发送的内容" />
+                <button class="btn primary" id="demo-sendbtn-A">发送</button>
+              </div>
+            </div>
+            <div class="term-pane" data-slot="B">
+              <div class="term-head">
+                <span class="badge slot-b">B</span><span class="port" id="demo-term-port-B">未打开</span>
+                <span class="badge" id="demo-term-state-B">-</span><span class="spacer"></span>
+                <span class="mono-ellipsis muted tiny" id="demo-term-sid-B"></span>
+              </div>
+              <div class="term-meta">
+                <span id="demo-term-counters-B">RX 0 / TX 0 / DROP 0</span>
+                <span id="demo-term-close-B"></span>
+                <span id="demo-term-grace-B"></span>
+              </div>
+              <div class="term-tools">
+                <label class="check"><input type="checkbox" id="demo-hex-B" checked /> HEX</label>
+                <label class="check"><input type="checkbox" id="demo-ts-B" checked /> 时间戳</label>
+                <label class="check"><input type="checkbox" id="demo-autoscroll-B" checked /> 自动滚动</label>
+                <label class="check"><input type="checkbox" id="demo-paused-B" /> 暂停</label>
+                <button class="btn small ghost" data-term="clear" data-slot="B">清空</button>
+                <button class="btn small ghost" data-term="export" data-slot="B">导出</button>
+                <button class="btn small warn" data-term="reconnect" data-slot="B">宽限重连</button>
+                <button class="btn small danger" data-term="abnormal" data-slot="B">模拟异常断开 (3001)</button>
+                <button class="btn small danger" data-term="close" data-slot="B">正常关闭 1000</button>
+              </div>
+              <div class="term-log" id="demo-log-B"></div>
+              <div class="term-send">
+                <select id="demo-sendmode-B" style="width:74px"><option value="text">文本</option><option value="hex">HEX</option></select>
+                <input id="demo-send-B" type="text" placeholder="输入要发送的内容" />
+                <button class="btn primary" id="demo-sendbtn-B">发送</button>
+              </div>
+            </div>
+          </div>
+        </section>
+        <!-- 调试 -->
+        <section id="demo-tab-debug" class="demo-panel">
+          <div class="grid cols-2" style="margin-bottom:14px">
+            <div class="card">
+              <h2>调试订阅</h2>
+              <div class="row">
+                <label class="check"><input type="checkbox" id="demo-debug-all" checked /> 全部会话</label>
+                <label class="check"><input type="checkbox" id="demo-debug-replay" checked /> replay 回放</label>
+                <button class="btn primary" id="demo-btn-debug-subscribe">订阅</button>
+                <button class="btn ghost" id="demo-btn-debug-unsubscribe">取消订阅</button>
+              </div>
+              <div id="demo-debug-sessions" class="row" style="margin-top:10px"></div>
+              <p class="hint">调试帧是旁路复制，允许丢弃；seq 跳变表示调试事件缺口。</p>
+              <div class="row" style="margin-top:10px">
+                <span class="badge" id="demo-debug-count">0 帧</span>
+                <span class="badge" id="demo-debug-gaps">seq 缺口 0</span>
+                <button class="btn small ghost" id="demo-btn-debug-export">导出调试缓冲</button>
+                <button class="btn small ghost" id="demo-btn-debug-clear">清空</button>
+              </div>
+            </div>
+            <div class="card">
+              <h2>调试写（管理端）</h2>
+              <div class="row">
+                <select id="demo-debug-write-session" style="min-width:220px"></select>
+                <select id="demo-debug-write-mode" style="width:76px"><option value="text">文本</option><option value="hex">HEX</option></select>
+                <input id="demo-debug-write-input" type="text" placeholder="发送到选中的串口" style="flex:1;min-width:160px" />
+                <button class="btn warn" id="demo-btn-debug-write">写入</button>
+              </div>
+              <p class="hint">这是调试用的 <code>session.write</code>，会与生产网页共用同一串口；仅 active 会话可写。</p>
+              <div class="mono-ellipsis small" id="demo-debug-write-result" style="margin-top:8px"></div>
+            </div>
+          </div>
+          <div class="card">
+            <h2>调试帧 <span class="badge" id="demo-debug-sub-state">未订阅</span></h2>
+            <div class="table-wrap debug-table">
+              <table>
+                <thead><tr><th>时间</th><th>会话</th><th>方向</th><th>seq</th><th>大小</th><th>HEX / ASCII</th></tr></thead>
+                <tbody id="demo-debug-body"></tbody>
+              </table>
+            </div>
+            <div class="empty" id="demo-debug-empty">尚未收到调试帧</div>
+          </div>
+        </section>
+        <!-- 边界 -->
+        <section id="demo-tab-edge" class="demo-panel">
+          <div class="card" style="margin-bottom:14px">
+            <h2>边界与错误码自检</h2>
+            <p class="hint">部分操作会断开 A 的数据 WS 或改变会话状态；测试后可用终端的“宽限重连”或“正常关闭”恢复。</p>
+            <div class="row" style="margin-top:10px">
+              <button class="btn danger" data-edge="second-client">第二数据客户端 → 4002</button>
+              <button class="btn danger" data-edge="active-open">active 重复 open → PORT_BUSY</button>
+              <button class="btn danger" data-edge="bad-token">错误 token → 握手失败</button>
+              <button class="btn danger" data-edge="missing-port">不存在串口 → PORT_NOT_FOUND</button>
+              <button class="btn warn" data-edge="write-inactive">非 active 调试写 → SESSION_STATE</button>
+              <button class="btn warn" data-edge="unknown-action">未知 action → UNKNOWN_ACTION</button>
+              <button class="btn warn" data-edge="text-frame">文本帧 → 1003</button>
+              <button class="btn warn" data-edge="oversize">超大帧 → 1009</button>
+              <button class="btn warn" data-edge="abnormal">异常断开 → grace</button>
+              <button class="btn warn" data-edge="normal-close">正常关闭 → 释放端口</button>
+            </div>
+          </div>
+          <div class="card">
+            <h2>边界结果</h2>
+            <div class="events" id="demo-edge-log"></div>
+          </div>
+        </section>
+        <!-- 事件 -->
+        <section id="demo-tab-events" class="demo-panel">
+          <div class="card">
+            <h2>管理事件 / 操作日志</h2>
+            <div class="row" style="margin-bottom:10px">
+              <input id="demo-event-filter" type="text" placeholder="过滤..." style="flex:1;min-width:200px" />
+              <button class="btn ghost" id="demo-btn-event-clear">清空</button>
+              <button class="btn ghost" id="demo-btn-event-export">导出 JSON</button>
+              <span class="badge" id="demo-event-count">0</span>
+            </div>
+            <div class="events" id="demo-event-log"></div>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script type="module" src="/js/test-page.js"></script>
+  </body>
+</html>

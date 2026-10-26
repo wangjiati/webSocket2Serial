@@ -14,19 +14,34 @@ fn client() -> reqwest::Client {
 #[test]
 fn admin_assets_have_required_controls_and_no_cdn() {
     let html = include_str!("../src/assets/index.html");
-    for id in [
-        "overview",
-        "assistant",
-        "main-tabs",
-        "demo",
-        "ports",
-        "sessions",
-        "admin-toggle",
-        "export",
-    ] {
+    for id in ["overview", "ports", "sessions", "admin-toggle", "copy-url"] {
         assert!(html.contains(&format!("id=\"{id}\"")), "missing {id}");
     }
+}
+
+/// 管理页入口链接必须在新标签打开。
+#[test]
+fn index_page_links_open_new_tabs() {
+    let html = include_str!("../src/assets/index.html");
+    for href in ["/assistant", "/test"] {
+        assert!(html.contains(&format!("href=\"{href}\"")), "missing {href}");
+    }
+    assert!(html.contains("target=\"_blank\""));
+    assert!(!html.contains("main-tabs"));
+    assert!(!html.contains("id=\"demo\""));
+    assert!(!html.contains("cdn."));
+    assert!(!html.contains("https://unpkg"));
+    let api = include_str!("../src/assets/js/api.js");
+    assert!(api.contains("127.0.0.1"));
+    assert!(api.contains("reconnect"));
+}
+
+/// 功能测试页保留现有演示 DOM 与 7 个子 tab。
+#[test]
+fn test_page_has_demo_controls() {
+    let html = include_str!("../src/assets/test.html");
     for id in [
+        "demo",
         "demo-statusbar",
         "demo-tabs",
         "demo-tab-overview",
@@ -47,12 +62,15 @@ fn admin_assets_have_required_controls_and_no_cdn() {
     ] {
         assert!(html.contains(&format!("id=\"{id}\"")), "missing {id}");
     }
-    assert!(!html.contains("id=\"tab-"));
+    for tab in [
+        "overview", "ports", "sessions", "terminal", "debug", "edge", "events",
+    ] {
+        assert!(
+            html.contains(&format!("data-demo-tab=\"{tab}\"")),
+            "missing tab {tab}"
+        );
+    }
     assert!(!html.contains("cdn."));
-    assert!(!html.contains("https://unpkg"));
-    let api = include_str!("../src/assets/js/api.js");
-    assert!(api.contains("127.0.0.1"));
-    assert!(api.contains("reconnect"));
 }
 
 /// 提取 HTML 中所有 `id="..."`，用于检查重复 ID。
@@ -68,15 +86,23 @@ fn collect_ids(html: &str) -> Vec<String> {
     ids
 }
 
-/// 管理页把演示 DOM 并进同一文档后，所有 id 必须唯一。
+/// 三份 HTML 的 id 分别唯一。
 #[test]
 fn admin_html_ids_are_unique() {
-    let html = include_str!("../src/assets/index.html");
-    let mut ids = collect_ids(html);
-    ids.sort();
-    let before = ids.len();
-    ids.dedup();
-    assert_eq!(before, ids.len(), "index.html 存在重复 id");
+    for (label, html) in [
+        ("index.html", include_str!("../src/assets/index.html")),
+        (
+            "assistant.html",
+            include_str!("../src/assets/assistant.html"),
+        ),
+        ("test.html", include_str!("../src/assets/test.html")),
+    ] {
+        let mut ids = collect_ids(html);
+        ids.sort();
+        let before = ids.len();
+        ids.dedup();
+        assert_eq!(before, ids.len(), "{label} 存在重复 id");
+    }
 }
 
 /// 助手页：固定提示、连接/收发/导出控制点。
@@ -156,6 +182,21 @@ async fn serves_assistant_page() {
     svc.shutdown().await;
 }
 
+/// `/test` 返回独立功能测试页。
+#[tokio::test]
+async fn serves_test_page() {
+    let svc = AdminService::start(0, 8765).await.unwrap();
+    let resp = client()
+        .get(format!("{}/test", svc.url()))
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.status().is_success(), "/test 未返回成功");
+    let html = resp.text().await.unwrap();
+    assert!(html.contains("功能测试"));
+    svc.shutdown().await;
+}
+
 /// 演示模块必须使用共享的 ManagementClient 契约（request 直接返回 data）。
 #[test]
 fn demo_module_uses_shared_client_contract() {
@@ -188,12 +229,12 @@ async fn serves_js_assets() {
     for path in [
         "api.js",
         "overview.js",
-        "assistant.js",
         "main.js",
         "demo.js",
         "format.js",
         "serial.js",
         "assistant-page.js",
+        "test-page.js",
     ] {
         let resp = client()
             .get(format!("{}/js/{path}", svc.url()))

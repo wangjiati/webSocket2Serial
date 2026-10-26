@@ -29,17 +29,19 @@ use crate::protocol::AdminState;
 const INDEX_HTML: &str = include_str!("../assets/index.html");
 /// 内嵌的串口助手页。
 const ASSISTANT_HTML: &str = include_str!("../assets/assistant.html");
+/// 内嵌的功能测试页。
+const TEST_HTML: &str = include_str!("../assets/test.html");
 /// 内嵌的样式。
 const STYLE_CSS: &str = include_str!("../assets/style.css");
 /// 内嵌的 JS 模块（任务 13）。
 const JS_API: &str = include_str!("../assets/js/api.js");
 const JS_OVERVIEW: &str = include_str!("../assets/js/overview.js");
-const JS_ASSISTANT: &str = include_str!("../assets/js/assistant.js");
 const JS_MAIN: &str = include_str!("../assets/js/main.js");
 const JS_DEMO: &str = include_str!("../assets/js/demo.js");
 const JS_FORMAT: &str = include_str!("../assets/js/format.js");
 const JS_SERIAL: &str = include_str!("../assets/js/serial.js");
 const JS_ASSISTANT_PAGE: &str = include_str!("../assets/js/assistant-page.js");
+const JS_TEST_PAGE: &str = include_str!("../assets/js/test-page.js");
 
 /// 管理页服务：可运行时开关的本地 HTTP 服务。
 pub struct AdminService {
@@ -231,6 +233,7 @@ fn build_router(management_port: u16, autostart: Arc<AtomicBool>, url: String) -
     Router::new()
         .route("/", get(index))
         .route("/assistant", get(assistant))
+        .route("/test", get(test))
         .route("/style.css", get(style))
         .route("/js/*path", get(js))
         .route("/api/config", get(config))
@@ -245,6 +248,10 @@ async fn assistant() -> Html<&'static str> {
     Html(ASSISTANT_HTML)
 }
 
+async fn test() -> Html<&'static str> {
+    Html(TEST_HTML)
+}
+
 async fn style() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
@@ -257,12 +264,12 @@ async fn js(Path(path): Path<String>) -> Result<impl IntoResponse, StatusCode> {
     let (content_type, body): (&str, &'static str) = match path.as_str() {
         "api.js" => ("text/javascript; charset=utf-8", JS_API),
         "overview.js" => ("text/javascript; charset=utf-8", JS_OVERVIEW),
-        "assistant.js" => ("text/javascript; charset=utf-8", JS_ASSISTANT),
         "main.js" => ("text/javascript; charset=utf-8", JS_MAIN),
         "demo.js" => ("text/javascript; charset=utf-8", JS_DEMO),
         "format.js" => ("text/javascript; charset=utf-8", JS_FORMAT),
         "serial.js" => ("text/javascript; charset=utf-8", JS_SERIAL),
         "assistant-page.js" => ("text/javascript; charset=utf-8", JS_ASSISTANT_PAGE),
+        "test-page.js" => ("text/javascript; charset=utf-8", JS_TEST_PAGE),
         _ => return Err(StatusCode::NOT_FOUND),
     };
     Ok(([(header::CONTENT_TYPE, content_type)], body))
