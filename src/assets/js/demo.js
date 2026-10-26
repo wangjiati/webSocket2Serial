@@ -97,6 +97,7 @@ export function createDemo(root, client) {
     },
     autoReconnect: false,
     pollBusy: false,
+    runner: { running: false, steps: [] },
   };
 
   // ----------------------------- logging -----------------------------
@@ -1268,6 +1269,254 @@ export function createDemo(root, client) {
   }
 
 
+  // ----------------------------- rule runner -----------------------------
+  function runnerSteps() {
+    return [
+      ["connect", "连接管理 WS"],
+      ["ports", "扫描端口"],
+      ["select", "选择 A/B 两个不同串口"],
+      ["open", "打开 A/B 串口"],
+      ["data", "连接 A/B 数据 WS"],
+      ["ab", "A → B 4KB 回环"],
+      ["ba", "B → A 4KB 回环"],
+      ["counters", "读取会话计数"],
+      ["debug", "订阅调试帧并验证"],
+      ["debug-write", "调试写并验证 B 收到"],
+      ["second", "第二数据客户端 4002"],
+      ["busy", "active 重复 open PORT_BUSY"],
+      ["normal", "正常关闭 A / 重新打开"],
+      ["grace", "异常断开 B / 宽限重连"],
+      ["admin", "管理页关闭 / 恢复（集成版跳过）"],
+      ["autostart", "开机自启状态（只读）"],
+      ["cleanup", "清理会话"],
+    ];
+  }
+
+  function renderRunner() {
+    const box = $("#demo-runner-steps");
+    if (!box) return;
+    box.textContent = "";
+    for (const step of state.runner.steps) {
+      const li = document.createElement("li");
+      li.dataset.id = step.id;
+      const icon =
+        step.status === "pass" ? "✓" : step.status === "fail" ? "✗" : step.status === "running" ? "…" : step.status === "skip" ? "−" : "·";
+      li.appendChild(el("span", "st " + step.status, icon));
+      li.appendChild(el("span", "", step.label));
+      li.appendChild(el("span", "detail", step.detail || ""));
+      box.appendChild(li);
+    }
+    const pass = state.runner.steps.filter((s) => s.status === "pass").length;
+    const fail = state.runner.steps.filter((s) => s.status === "fail").length;
+    const skip = state.runner.steps.filter((s) => s.status === "skip").length;
+    $("#demo-runner-count").textContent =
+      `${pass} / ${state.runner.steps.length}` + (skip ? ` · ${skip} skip` : "") + (fail ? ` · ${fail} FAIL` : "");
+    $("#demo-runner-status").textContent = state.runner.running
+      ? "运行中"
+      : fail
+        ? "有失败"
+        : pass + skip === state.runner.steps.length
+          ? skip
+            ? "完成（已跳过）"
+            : "全部通过"
+          : "未运行";
+    $("#demo-runner-status").className =
+      "badge " + (fail ? "error" : pass + skip === state.runner.steps.length ? "active" : "");
+  }
+
+  function runnerSet(id, status, detail = "") {
+    const step = state.runner.steps.find((s) => s.id === id);
+    if (!step) return;
+    step.status = status;
+    step.detail = detail;
+    renderRunner();
+  }
+
+  async function waitSessionState(sessionId, want, timeout = 6000) {
+    const end = now() + timeout;
+    while (now() < end) {
+      if (want === "gone") {
+        if (!state.sessions.has(sessionId)) return;
+      } else {
+        const session = state.sessions.get(sessionId);
+        if (session?.state === want) return;
+      }
+      await sleep(100);
+      try {
+        await refreshSessions();
+      } catch {
+        // 轮询错误继续等待
+      }
+    }
+    throw new Error(`等待会话 ${shortId(sessionId)} 状态 ${want} 超时`);
+  }
+
+  async function runDemo() {
+    if (state.runner.running) return;
+    state.runner.running = true;
+    state.runner.steps = runnerSteps().map(([id, label]) => ({ id, label, status: "pending", detail: "" }));
+    renderRunner();
+    const mark = (id, status, detail) => runnerSet(id, status, detail);
+    let a = null;
+    let b = null;
+
+    try {
+      mark("connect", "running");
+      await client.whenReady();
+      mark("connect", "pass", `127.0.0.1:${client.managementPort}`);
+
+      mark("ports", "running");
+      const ports = await refreshPorts();
+      mark("ports", "pass", `${ports.length} 个串口`);
+
+      mark("select", "running");
+      let aPath = $("#demo-path-A").value.trim();
+      let bPath = $("#demo-path-B").value.trim();
+      if (!aPath || !ports.some((p) => p.path === aPath)) aPath = ports[0]?.path;
+      if (!bPath || !ports.some((p) => p.path === bPath) || bPath === aPath) {
+        bPath = ports.find((p) => p.path !== aPath)?.path;
+      }
+      if (!aPath || !bPath) throw new Error("需要至少两个不同的串口");
+      $("#demo-path-A").value = aPath;
+      $("#demo-path-B").value = bPath;
+      mark("select", "pass", `${aPath} ↔ ${bPath}`);
+
+      await closeSlot("A");
+      await closeSlot("B");
+
+      mark("open", "running");
+      a = await openSlot("A");
+      b = await openSlot("B");
+      mark("open", "pass", "A/B 已打开");
+
+      mark("data", "running");
+      if (a.state !== "active" || b.state !== "active") throw new Error("A/B 数据 WS 未 active");
+      mark("data", "pass");
+
+      mark("ab", "running");
+      a.clearBuffer();
+      b.clearBuffer();
+      const p1 = pattern(4096);
+      a.sendBytes(p1);
+      const gotB = await b.takeBytes(p1.length, 6000);
+      if (!bytesEqual(gotB, p1)) throw new Error(`A→B 内容不一致（${gotB.length}/${p1.length}）`);
+      mark("ab", "pass", "4096 B 一致");
+
+      mark("ba", "running");
+      const p2 = pattern(4096);
+      b.clearBuffer();
+      a.clearBuffer();
+      b.sendBytes(p2);
+      const gotA = await a.takeBytes(p2.length, 6000);
+      if (!bytesEqual(gotA, p2)) throw new Error(`B→A 内容不一致（${gotA.length}/${p2.length}）`);
+      mark("ba", "pass", "4096 B 一致");
+
+      mark("counters", "running");
+      await refreshSessions();
+      const sessionA = state.sessions.get(a.sessionId);
+      const sessionB = state.sessions.get(b.sessionId);
+      if (!sessionA || !sessionB) throw new Error("刷新后找不到 A/B 会话");
+      mark(
+        "counters",
+        "pass",
+        `A RX ${sessionA.counters.rxBytes}/TX ${sessionA.counters.txBytes}; B RX ${sessionB.counters.rxBytes}/TX ${sessionB.counters.txBytes}`,
+      );
+
+      mark("debug", "running");
+      await client.subscribeDebug("all", true);
+      state.debug.subscribed = true;
+      state.debug.all = true;
+      state.debug.ids.clear();
+      state.debug.frames.length = 0;
+      state.debug.gaps = 0;
+      state.debug.lastSeq.clear();
+      renderDebugOptions();
+      renderDebugState();
+      renderDebugFrames();
+      const debugBefore = state.debug.frames.length;
+      a.clearBuffer();
+      b.clearBuffer();
+      a.sendBytes(textEncoder.encode("DBG"));
+      await b.takeBytes(3, 4000);
+      await sleep(250);
+      if (state.debug.frames.length <= debugBefore) throw new Error("未收到 debug.frame");
+      mark("debug", "pass", `${state.debug.frames.length} 帧`);
+
+      mark("debug-write", "running");
+      a.clearBuffer();
+      b.clearBuffer();
+      const written = await client.request("session.write", {
+        sessionId: a.sessionId,
+        dataB64: b64encodeBytes(textEncoder.encode("MGT")),
+      });
+      const gotMgt = await b.takeBytes(3, 4000);
+      if (!bytesEqual(gotMgt, textEncoder.encode("MGT"))) throw new Error("B 未收到调试写内容");
+      mark("debug-write", "pass", `written=${written.written}`);
+
+      mark("second", "running");
+      const second = new WebSocket(a.dataUrl);
+      second.binaryType = "arraybuffer";
+      const secondCode = await waitClose(second, 4000);
+      if (secondCode !== 4002) throw new Error(`第二客户端 close=${secondCode}，期望 4002`);
+      mark("second", "pass", "4002");
+
+      mark("busy", "running");
+      try {
+        await client.request("session.open", a.params);
+        throw new Error("重复 open 未被拒绝");
+      } catch (err) {
+        if (err.code !== "PORT_BUSY") throw err;
+      }
+      mark("busy", "pass", "PORT_BUSY");
+
+      mark("normal", "running");
+      const oldAId = a.sessionId;
+      await closeSlot("A", true);
+      await waitSessionState(oldAId, "gone", 5000);
+      a = await openSlot("A");
+      mark("normal", "pass", "关闭 1000 + 重新打开");
+
+      mark("grace", "running");
+      b.disconnectAbnormal(3001);
+      await waitSessionState(b.sessionId, "grace", 5000);
+      await b.reconnectOld();
+      await waitSessionState(b.sessionId, "active", 5000);
+      mark("grace", "pass", "3001 → grace → active");
+
+      mark("admin", "skip", "集成在管理页内，跳过关闭自身；可在概览页手动验证");
+      mark("autostart", "pass", `当前 ${state.autostart ? "开启" : "关闭"}（只读）`);
+      mark("cleanup", "running");
+    } catch (err) {
+      const running = state.runner.steps.find((s) => s.status === "running");
+      if (running) mark(running.id, "fail", err.message);
+      for (const step of state.runner.steps) {
+        if (step.status === "pending") step.status = "skip";
+      }
+      logEvent("error", "一键演示: " + err.message);
+    } finally {
+      try {
+        await closeSlot("A");
+        await closeSlot("B");
+        if (state.debug.subscribed) {
+          await client.unsubscribeDebug().catch(() => {});
+          state.debug.subscribed = false;
+          state.debug.ids.clear();
+          renderDebugOptions();
+          renderDebugState();
+        }
+        await refreshSessions();
+        mark("cleanup", "pass", "会话已清理");
+      } catch (err) {
+        mark("cleanup", "fail", err.message);
+      }
+      state.runner.running = false;
+      renderRunner();
+      logEvent("info", "一键演示结束");
+    }
+  }
+
+
+  // ----------------------------- tabs / init -----------------------------
   const tabs = $$("[data-demo-tab]");
   const panels = $$(".demo-panel");
   let current = "overview";
@@ -1379,6 +1628,9 @@ export function createDemo(root, client) {
     $("#demo-btn-event-export").addEventListener("click", () => {
       download(`ws2s-events-${Date.now()}.json`, JSON.stringify(state.events, null, 2), "application/json");
     });
+    $("#demo-btn-run-demo").addEventListener("click", () => {
+      runDemo();
+    });
     $("#demo-debug-all").addEventListener("change", () => {
       state.debug.all = $("#demo-debug-all").checked;
       renderDebugOptions();
@@ -1463,6 +1715,8 @@ export function createDemo(root, client) {
   renderTerminal();
   renderDebugOptions();
   renderDebugFrames();
+  state.runner.steps = runnerSteps().map(([id, label]) => ({ id, label, status: "pending", detail: "" }));
+  renderRunner();
   activate(current);
   setInterval(() => {
     for (const slot of ["A", "B"]) state.slots[slot]?._renderMeta();
