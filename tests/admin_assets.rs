@@ -79,6 +79,16 @@ fn admin_html_ids_are_unique() {
     assert_eq!(before, ids.len(), "index.html 存在重复 id");
 }
 
+/// 演示模块必须使用共享的 ManagementClient 契约（request 直接返回 data）。
+#[test]
+fn demo_module_uses_shared_client_contract() {
+    let js = include_str!("../src/assets/js/demo.js");
+    assert!(js.contains("function renderTerminal"), "缺少终端渲染实现");
+    assert!(js.contains("function openSlot"), "缺少会话打开实现");
+    assert!(!js.contains("class ManagementClient"), "演示模块不得自带管理客户端");
+    assert!(!js.contains("r.data"), "request() 已直接返回 data");
+}
+
 /// `/js/*` 由 HTTP 管理服务静态分发，且内容非空、Content-Type 正确。
 #[tokio::test]
 async fn serves_js_assets() {
