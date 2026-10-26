@@ -17,6 +17,8 @@ fn admin_assets_have_required_controls_and_no_cdn() {
     for id in [
         "overview",
         "assistant",
+        "main-tabs",
+        "demo",
         "ports",
         "sessions",
         "admin-toggle",
@@ -35,7 +37,7 @@ fn admin_assets_have_required_controls_and_no_cdn() {
 #[tokio::test]
 async fn serves_js_assets() {
     let svc = AdminService::start(0, 8765).await.unwrap();
-    for path in ["api.js", "overview.js", "assistant.js", "main.js"] {
+    for path in ["api.js", "overview.js", "assistant.js", "main.js", "demo.js"] {
         let resp = client()
             .get(format!("{}/js/{path}", svc.url()))
             .send()

@@ -12,8 +12,14 @@
       <span id="conn-status" class="badge waiting">连接中…</span>
     </header>
 
+    <nav id="main-tabs" class="main-tabs" role="tablist" aria-label="管理页">
+      <button type="button" role="tab" data-main-tab="overview" aria-selected="true" aria-controls="overview">概览</button>
+      <button type="button" role="tab" data-main-tab="assistant" aria-selected="false" aria-controls="assistant" tabindex="-1">串口助手</button>
+      <button type="button" role="tab" data-main-tab="demo" aria-selected="false" aria-controls="demo" tabindex="-1">功能演示</button>
+    </nav>
+
     <main>
-      <section id="overview">
+      <section id="overview" class="tab-panel active" role="tabpanel">
         <h2>概览</h2>
 
         <div class="info-grid">
@@ -71,7 +77,7 @@
         </div>
       </section>
 
-      <section id="assistant">
+      <section id="assistant" class="tab-panel" role="tabpanel">
         <h2>串口助手</h2>
 
         <div class="assistant-toolbar">
@@ -116,6 +122,10 @@
             <span id="send-status" class="status"></span>
           </div>
         </div>
+      </section>
+
+      <section id="demo" class="tab-panel" role="tabpanel">
+        <p class="muted">演示模块加载中…</p>
       </section>
     </main>
 

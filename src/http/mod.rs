@@ -34,6 +34,7 @@ const JS_API: &str = include_str!("../assets/js/api.js");
 const JS_OVERVIEW: &str = include_str!("../assets/js/overview.js");
 const JS_ASSISTANT: &str = include_str!("../assets/js/assistant.js");
 const JS_MAIN: &str = include_str!("../assets/js/main.js");
+const JS_DEMO: &str = include_str!("../assets/js/demo.js");
 
 /// 管理页服务：可运行时开关的本地 HTTP 服务。
 pub struct AdminService {
@@ -248,6 +249,7 @@ async fn js(Path(path): Path<String>) -> Result<impl IntoResponse, StatusCode> {
         "overview.js" => ("text/javascript; charset=utf-8", JS_OVERVIEW),
         "assistant.js" => ("text/javascript; charset=utf-8", JS_ASSISTANT),
         "main.js" => ("text/javascript; charset=utf-8", JS_MAIN),
+        "demo.js" => ("text/javascript; charset=utf-8", JS_DEMO),
         _ => return Err(StatusCode::NOT_FOUND),
     };
     Ok(([(header::CONTENT_TYPE, content_type)], body))

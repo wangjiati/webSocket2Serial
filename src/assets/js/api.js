@@ -41,6 +41,7 @@ export class ManagementClient {
     this.ports = [];
     this.hello = null;
     this.admin = null;
+    this.readyWaiters = new Set();
   }
 
   connect() {
@@ -94,6 +95,7 @@ export class ManagementClient {
     if (name === "hello") {
       this.hello = data || null;
       this.admin = data && data.admin ? data.admin : null;
+      this.resolveReadyWaiters();
       this.align();
       this.restoreSubscription();
     } else if (name === "session.state") {
@@ -150,6 +152,45 @@ export class ManagementClient {
       return undefined;
     }
     return this.request("debug.subscribe", this.subscription);
+  }
+
+  /** 取消调试订阅并清空重连后恢复用的记录。 */
+  unsubscribeDebug() {
+    this.subscription = null;
+    return this.request("debug.subscribe", { sessionIds: [], replay: false });
+  }
+
+  /**
+   * 等待 hello 到达；已连接时立即返回。超时或连接关闭时 reject。
+   */
+  whenReady(timeoutMs = 6000) {
+    if (this.hello) {
+      return Promise.resolve(this.hello);
+    }
+    return new Promise((resolve, reject) => {
+      const waiter = { resolve, reject, timer: null };
+      waiter.timer = setTimeout(() => {
+        this.readyWaiters.delete(waiter);
+        reject(new Error("等待管理 WS 连接超时"));
+      }, timeoutMs);
+      this.readyWaiters.add(waiter);
+    });
+  }
+
+  resolveReadyWaiters() {
+    for (const waiter of this.readyWaiters) {
+      clearTimeout(waiter.timer);
+      waiter.resolve(this.hello);
+    }
+    this.readyWaiters.clear();
+  }
+
+  rejectReadyWaiters(error) {
+    for (const waiter of this.readyWaiters) {
+      clearTimeout(waiter.timer);
+      waiter.reject(error);
+    }
+    this.readyWaiters.clear();
   }
 
   request(action, params) {
@@ -228,6 +269,7 @@ export class ManagementClient {
     this.ws = null;
     this.connected = false;
     this.emitConnection(false);
+    this.rejectReadyWaiters(new Error("管理 WS 已断开"));
     for (const [, entry] of this.pending) {
       clearTimeout(entry.timer);
       entry.reject(new Error("连接中断"));
@@ -259,6 +301,7 @@ export class ManagementClient {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.rejectReadyWaiters(new Error("连接已关闭"));
     for (const [, entry] of this.pending) {
       clearTimeout(entry.timer);
       entry.reject(new Error("连接已关闭"));
