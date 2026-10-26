@@ -69,7 +69,9 @@ cd websocket2serial
 - 部署：`docs/deployment.md`（自动登录前提、CSP、`127.0.0.1`、FTDI latency、防火墙、
   崩溃守护边界、日志、升级/回滚、平台依赖）。
 - 参考客户端（无构建步骤 ES module）：`clients/ws2serial-client.js`。
-- 全功能演示页：`demo/websocket2serial-demo.html`（独立单文件、零构建，覆盖全部动作/事件/错误码/宽限重连/一键自检，用法见 `demo/README.md`）。
+- 功能演示：管理页打开 `http://127.0.0.1:8766/` →「功能演示」tab（浅色统一主题，7 个子 tab：演示概览/端口/会话/双端口终端/调试/边界自检/事件日志）。
+- 独立零构建演示页：`demo/websocket2serial-demo.html`（深色、自带连接控件，用法见 `demo/README.md`）。
+- 两份演示功能需同步维护；集成版不提供管理页开关，一键演示会跳过「关闭管理页」步骤。
 - 命令行示例：`examples/ws2serial-cli.py`（`--list` / `--port` / `--hex` / `--listen`）。
 - 浸泡/回环验收脚本：`scripts/soak.py`（`--hours 8 --reconnects 50`）。
 
