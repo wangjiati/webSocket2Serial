@@ -238,6 +238,50 @@ fn demo_module_uses_shared_client_contract() {
     assert!(!js.contains("r.data"), "request() 已直接返回 data");
 }
 
+/// 所有管理页资源禁用浏览器缓存，避免升级 exe 后继续用旧页面/旧模块。
+#[tokio::test]
+async fn static_assets_are_no_store() {
+    let svc = AdminService::start(0, 8765).await.unwrap();
+    for path in [
+        "/",
+        "/assistant",
+        "/test",
+        "/style.css",
+        "/js/api.js",
+        "/api/config",
+    ] {
+        let resp = client()
+            .get(format!("{}{}", svc.url(), path))
+            .send()
+            .await
+            .unwrap();
+        assert!(resp.status().is_success(), "{path} 未返回成功");
+        let cache = resp
+            .headers()
+            .get("cache-control")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert!(
+            cache.contains("no-store"),
+            "{path} 缺少 Cache-Control: no-store（实际：{cache}）"
+        );
+    }
+    svc.shutdown().await;
+}
+
+/// 旧的监控助手模块已删除。
+#[tokio::test]
+async fn removed_assistant_js_returns_404() {
+    let svc = AdminService::start(0, 8765).await.unwrap();
+    let resp = client()
+        .get(format!("{}/js/assistant.js", svc.url()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 404);
+    svc.shutdown().await;
+}
+
 /// `/js/*` 由 HTTP 管理服务静态分发，且内容非空、Content-Type 正确。
 #[tokio::test]
 async fn serves_js_assets() {

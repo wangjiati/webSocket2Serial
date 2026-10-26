@@ -240,21 +240,24 @@ fn build_router(management_port: u16, autostart: Arc<AtomicBool>, url: String) -
         .with_state(state)
 }
 
-async fn index() -> Html<&'static str> {
-    Html(INDEX_HTML)
+async fn index() -> impl IntoResponse {
+    ([(header::CACHE_CONTROL, "no-store")], Html(INDEX_HTML))
 }
 
-async fn assistant() -> Html<&'static str> {
-    Html(ASSISTANT_HTML)
+async fn assistant() -> impl IntoResponse {
+    ([(header::CACHE_CONTROL, "no-store")], Html(ASSISTANT_HTML))
 }
 
-async fn test() -> Html<&'static str> {
-    Html(TEST_HTML)
+async fn test() -> impl IntoResponse {
+    ([(header::CACHE_CONTROL, "no-store")], Html(TEST_HTML))
 }
 
 async fn style() -> impl IntoResponse {
     (
-        [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
+        [
+            (header::CONTENT_TYPE, "text/css; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
         STYLE_CSS,
     )
 }
@@ -272,17 +275,26 @@ async fn js(Path(path): Path<String>) -> Result<impl IntoResponse, StatusCode> {
         "test-page.js" => ("text/javascript; charset=utf-8", JS_TEST_PAGE),
         _ => return Err(StatusCode::NOT_FOUND),
     };
-    Ok(([(header::CONTENT_TYPE, content_type)], body))
+    Ok((
+        [
+            (header::CONTENT_TYPE, content_type),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        body,
+    ))
 }
 
-async fn config(State(state): State<Arc<HttpState>>) -> Json<ConfigResponse> {
-    Json(ConfigResponse {
-        management_port: state.management_port,
-        version: env!("CARGO_PKG_VERSION").to_string(),
-        admin: AdminState {
-            enabled: true,
-            url: state.url.clone(),
-        },
-        autostart: state.autostart.load(Ordering::SeqCst),
-    })
+async fn config(State(state): State<Arc<HttpState>>) -> impl IntoResponse {
+    (
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(ConfigResponse {
+            management_port: state.management_port,
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            admin: AdminState {
+                enabled: true,
+                url: state.url.clone(),
+            },
+            autostart: state.autostart.load(Ordering::SeqCst),
+        }),
+    )
 }
