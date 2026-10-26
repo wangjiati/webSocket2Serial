@@ -22,6 +22,12 @@ export function createDemo(root, client) {
     }
     return btoa(s);
   };
+  const b64decodeBytes = (b64) => {
+    const s = atob(b64);
+    const out = new Uint8Array(s.length);
+    for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+    return out;
+  };
   const hexToBytes = (text) => {
     const clean = String(text).replace(/[^0-9a-fA-F]/g, "");
     if (!clean.length) throw new Error("HEX 内容为空");
@@ -76,6 +82,15 @@ export function createDemo(root, client) {
     adminEnabled: null,
     autostart: null,
     events: [],
+    debug: {
+      subscribed: false,
+      all: true,
+      ids: new Set(),
+      frames: [],
+      lastSeq: new Map(),
+      gaps: 0,
+    },
+    closedCodes: new Map(),
     terminalPrefs: {
       A: { hex: true, ts: true, autoscroll: true, paused: false },
       B: { hex: true, ts: true, autoscroll: true, paused: false },
@@ -165,9 +180,18 @@ export function createDemo(root, client) {
       state.sessions.set(data.sessionId, next);
       const controller = slotForSession(data.sessionId);
       if (controller) controller.updateInfo(next);
-      renderSessions();
+      if (data.state === "closed") {
+        state.closedCodes.set(data.sessionId, data.closeCode);
+        logEvent("warn", `会话关闭 ${shortId(data.sessionId)} ${data.reason || ""} code=${data.closeCode ?? "-"}`);
+        state.sessions.delete(data.sessionId);
+        renderSessions();
+      } else {
+        logEvent("event", { event: name, data });
+        renderSessions();
+      }
       renderTerminalMeta();
-      logEvent("event", { event: name, data });
+      renderDebugOptions();
+      renderDebugWriteOptions();
       return;
     }
     if (name === "admin.state") {
@@ -179,6 +203,10 @@ export function createDemo(root, client) {
     if (name === "ports.changed") {
       logEvent("event", { event: name, data });
       refreshPorts().catch(() => {});
+      return;
+    }
+    if (name === "debug.frame") {
+      onDebugFrame(data);
       return;
     }
     logEvent("event", { event: name, data });
@@ -461,6 +489,8 @@ export function createDemo(root, client) {
     const count = $("#demo-sessions-count");
     if (count) count.textContent = String(rows.length);
     renderHelloSessions();
+    renderDebugOptions();
+    renderDebugWriteOptions();
   }
 
   // ----------------------------- data session -----------------------------
@@ -936,7 +966,308 @@ export function createDemo(root, client) {
     download(`ws2s-${slot}-${Date.now()}.txt`, lines.join("\n"));
   }
 
-  // ----------------------------- tabs / init -----------------------------
+  // ----------------------------- debug -----------------------------
+  function renderDebugOptions() {
+    const box = $("#demo-debug-sessions");
+    if (!box) return;
+    const selected = new Set(state.debug.ids);
+    const all = $("#demo-debug-all")?.checked !== false;
+    box.textContent = "";
+    for (const session of state.sessions.values()) {
+      const label = el("label", "check");
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.dataset.session = session.sessionId;
+      checkbox.checked = all || selected.has(session.sessionId);
+      checkbox.disabled = all;
+      label.appendChild(checkbox);
+      label.appendChild(
+        document.createTextNode(`${slotForSession(session.sessionId)?.slot || "?"} ${session.port} (${shortId(session.sessionId)})`),
+      );
+      box.appendChild(label);
+    }
+    if (!state.sessions.size) box.appendChild(el("span", "muted small", "暂无会话"));
+  }
+
+  function renderDebugState() {
+    const stateEl = $("#demo-debug-sub-state");
+    if (stateEl) {
+      stateEl.textContent = state.debug.subscribed ? "已订阅" : "未订阅";
+      stateEl.className = "badge " + (state.debug.subscribed ? "active" : "");
+    }
+    const countEl = $("#demo-debug-count");
+    if (countEl) countEl.textContent = `${state.debug.frames.length} 帧`;
+    const gapsEl = $("#demo-debug-gaps");
+    if (gapsEl) gapsEl.textContent = `seq 缺口 ${state.debug.gaps}`;
+  }
+
+  function debugFrameRow(frame) {
+    const tr = document.createElement("tr");
+    tr.appendChild(el("td", "mono", fmtTime(frame.ts)));
+    const slot = slotForSession(frame.sessionId);
+    tr.appendChild(el("td", "mono", `${slot?.slot || "?"} ${shortId(frame.sessionId)}`));
+    tr.appendChild(el("td", "", frame.direction === "rx" ? "RX" : "TX"));
+    tr.appendChild(el("td", "mono", frame.seq ?? "-"));
+    tr.appendChild(el("td", "mono", String(frame.size ?? frame.bytes.length)));
+    const cell = el("td", "hexcell");
+    const max = 160;
+    cell.textContent = `${bytesToHex(frame.bytes.subarray(0, max))}${frame.bytes.length > max ? " …" : ""}`;
+    cell.title = bytesToAscii(frame.bytes);
+    tr.appendChild(cell);
+    return tr;
+  }
+
+  function renderDebugFrames() {
+    const body = $("#demo-debug-body");
+    const empty = $("#demo-debug-empty");
+    if (!body) return;
+    body.textContent = "";
+    if (!state.debug.frames.length) empty?.classList.remove("hidden");
+    else empty?.classList.add("hidden");
+    const frag = document.createDocumentFragment();
+    for (const frame of state.debug.frames.slice(-5000)) frag.appendChild(debugFrameRow(frame));
+    body.appendChild(frag);
+    renderDebugState();
+  }
+
+  function onDebugFrame(data) {
+    const bytes = b64decodeBytes(data.dataB64 || "");
+    const frame = { ts: now(), ...data, bytes };
+    const last = state.debug.lastSeq.get(data.sessionId) || 0;
+    if (data.seq > last + 1) {
+      state.debug.gaps += data.seq - last - 1;
+      logEvent("warn", `调试 seq 缺口: ${shortId(data.sessionId)} ${last} → ${data.seq}`);
+    }
+    if (data.seq) state.debug.lastSeq.set(data.sessionId, data.seq);
+    state.debug.frames.push(frame);
+    $("#demo-debug-empty")?.classList.add("hidden");
+    if (state.debug.frames.length > 5000) state.debug.frames.splice(0, state.debug.frames.length - 5000);
+    if (state.debug.frames.length % 20 === 0) {
+      renderDebugFrames();
+    } else {
+      const body = $("#demo-debug-body");
+      if (body) {
+        body.appendChild(debugFrameRow(frame));
+        while (body.childElementCount > 5000) body.firstElementChild?.remove();
+      }
+      renderDebugState();
+    }
+    const controller = slotForSession(data.sessionId);
+    if (controller) controller._renderMeta();
+  }
+
+  async function subscribeDebug() {
+    if (!client.connected) throw new Error("管理 WS 未连接");
+    const all = $("#demo-debug-all").checked;
+    const ids = all ? "all" : $$("#demo-debug-sessions input[type=checkbox]:checked").map((x) => x.dataset.session);
+    if (!all && !ids.length) throw new Error("请选择至少一个会话，或勾选「全部会话」");
+    await client.subscribeDebug(ids, $("#demo-debug-replay").checked);
+    state.debug.subscribed = true;
+    state.debug.all = all;
+    state.debug.ids = new Set(all ? [] : ids);
+    renderDebugOptions();
+    renderDebugState();
+    logEvent("ok", `已订阅调试帧: ${all ? "全部" : ids.length + " 个会话"}`);
+  }
+
+  async function unsubscribeDebug() {
+    if (!client.connected) throw new Error("管理 WS 未连接");
+    await client.unsubscribeDebug();
+    state.debug.subscribed = false;
+    state.debug.ids.clear();
+    renderDebugOptions();
+    renderDebugState();
+    logEvent("info", "已取消调试订阅");
+  }
+
+  function exportDebug() {
+    const lines = state.debug.frames.map(
+      (frame) =>
+        `${fmtTime(frame.ts)}\t${frame.sessionId}\t${frame.direction}\t${frame.seq}\t${bytesToHex(frame.bytes)}\t${bytesToAscii(frame.bytes)}`,
+    );
+    download(`ws2s-debug-${Date.now()}.txt`, lines.join("\n"));
+  }
+
+  async function debugWrite() {
+    const sessionId = $("#demo-debug-write-session").value;
+    if (!sessionId) throw new Error("没有可写的会话");
+    const mode = $("#demo-debug-write-mode").value;
+    const text = $("#demo-debug-write-input").value;
+    if (!text.length) throw new Error("请输入内容");
+    const bytes = mode === "hex" ? hexToBytes(text) : textEncoder.encode(text);
+    const data = await client.request("session.write", { sessionId, dataB64: b64encodeBytes(bytes) });
+    $("#demo-debug-write-result").textContent = `written=${data.written}`;
+    logEvent("ok", `调试写 ${sessionId.slice(0, 8)} ${data.written} 字节`);
+  }
+
+  function renderDebugWriteOptions() {
+    const select = $("#demo-debug-write-session");
+    if (!select) return;
+    const previous = select.value;
+    select.textContent = "";
+    for (const session of state.sessions.values()) {
+      const option = el("option", "", `${slotForSession(session.sessionId)?.slot || "?"} ${session.port} (${shortId(session.sessionId)})`);
+      option.value = session.sessionId;
+      select.appendChild(option);
+    }
+    if (previous && [...select.options].some((option) => option.value === previous)) {
+      select.value = previous;
+    }
+  }
+
+  // ----------------------------- edge tests -----------------------------
+  function requireA() {
+    const a = state.slots.A;
+    if (!a) throw new Error("请先在「会话」子 tab 打开 A");
+    return a;
+  }
+
+  function waitClose(ws, timeout = 4000) {
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (code) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve(code);
+      };
+      const timer = setTimeout(() => {
+        try {
+          ws.close();
+        } catch {
+          // ignore
+        }
+        finish(-1);
+      }, timeout);
+      ws.onclose = (event) => finish(event.code);
+      ws.onerror = () => {};
+    });
+  }
+
+  async function edgeSecondClient() {
+    const a = requireA();
+    if (a.state !== "active") throw new Error("A 必须是 active 才能验证第二客户端 4002");
+    if (!a.dataUrl) throw new Error("A 没有数据 URL");
+    const ws = new WebSocket(a.dataUrl);
+    ws.binaryType = "arraybuffer";
+    const code = await waitClose(ws, 4000);
+    edgeLog(`第二数据客户端 close code=${code}（期望 4002）`);
+    logEvent(code === 4002 ? "ok" : "warn", `第二数据客户端 close=${code}`);
+  }
+
+  async function edgeActiveOpen() {
+    const a = requireA();
+    if (a.state !== "active") throw new Error("A 必须是 active 才能验证 PORT_BUSY");
+    try {
+      await client.request("session.open", a.params);
+      edgeLog("重复 open 意外成功");
+    } catch (err) {
+      edgeLog(`重复 open 被拒绝: ${err.code || "ERROR"}: ${err.message}（期望 PORT_BUSY）`);
+      logEvent("ok", "active 重复 open 被拒绝");
+    }
+  }
+
+  async function edgeBadToken() {
+    const a = requireA();
+    if (a.state !== "active") throw new Error("A 必须是 active 才能验证 token");
+    const base = a.dataUrl.split("/").slice(0, -1).join("/");
+    const ws = new WebSocket(`${base}/bad-token-${Date.now()}`);
+    ws.binaryType = "arraybuffer";
+    const code = await waitClose(ws, 4000);
+    edgeLog(`错误 token 连接结束 code=${code}（浏览器不暴露 HTTP 404，只看到握手失败/1006）`);
+  }
+
+  async function edgeMissingPort() {
+    const base = state.ports[0]?.path || "serial";
+    const path = `${base}__missing__`;
+    try {
+      await client.request("session.open", { ...readOpenParams(path), path });
+      edgeLog("不存在串口意外打开成功");
+    } catch (err) {
+      edgeLog(`不存在串口被拒绝: ${err.code || "ERROR"}: ${err.message}（期望 PORT_NOT_FOUND）`);
+    }
+  }
+
+  async function edgeWriteInactive() {
+    const used = new Set(Array.from(state.sessions.values(), (s) => s.port));
+    const free = state.ports.find((p) => !used.has(p.path));
+    let sessionId = null;
+    let restoreA = false;
+    if (free) {
+      const data = await client.request("session.open", readOpenParams(free.path));
+      sessionId = data.sessionId;
+    } else {
+      const a = requireA();
+      const path = a.params.path;
+      await closeSlot("A");
+      restoreA = true;
+      edgeLog(`没有空闲串口，临时借用 A (${path}) 测试，完成后自动恢复`);
+      const data = await client.request("session.open", readOpenParams(path));
+      sessionId = data.sessionId;
+    }
+    try {
+      await client.request("session.write", { sessionId, dataB64: btoa("x") });
+      edgeLog("非 active 写意外成功");
+    } catch (err) {
+      edgeLog(`非 active 写被拒绝: ${err.code || "ERROR"}: ${err.message}（期望 SESSION_STATE）`);
+    } finally {
+      await client.request("session.close", { sessionId }).catch(() => {});
+      if (restoreA) {
+        try {
+          await openSlot("A");
+          edgeLog("A 已恢复");
+        } catch (err) {
+          edgeLog(`A 恢复失败: ${err.message}`);
+        }
+      }
+    }
+  }
+
+  async function edgeUnknownAction() {
+    try {
+      await client.request("no.such.action", {});
+      edgeLog("未知 action 意外成功");
+    } catch (err) {
+      edgeLog(`未知 action: ${err.code || "ERROR"}: ${err.message}（期望 UNKNOWN_ACTION）`);
+    }
+  }
+
+  async function edgeTextFrame() {
+    const a = requireA();
+    if (!a.ws || a.ws.readyState !== WebSocket.OPEN) throw new Error("A 数据 WS 未连接");
+    if (!confirm("会向 A 发送文本帧，服务端将以 1003 关闭数据 WS，会话进入 grace。继续？")) return;
+    a.ws.send("this-is-a-text-frame");
+    edgeLog("已发送文本帧，等待 1003...");
+    await sleep(400);
+    edgeLog(`A 状态=${a.state} close=${a.closeCode ?? "-"}`);
+  }
+
+  async function edgeOversize() {
+    const a = requireA();
+    if (!a.ws || a.ws.readyState !== WebSocket.OPEN) throw new Error("A 数据 WS 未连接");
+    if (!confirm("会向 A 发送 1MiB+1 字节，服务端将以 1009 关闭数据 WS，会话进入 grace。继续？")) return;
+    a.ws.send(new Uint8Array(1024 * 1024 + 1));
+    edgeLog("已发送 1MiB+1，等待 1009...");
+    await sleep(500);
+    edgeLog(`A 状态=${a.state} close=${a.closeCode ?? "-"}`);
+  }
+
+  async function edgeAbnormal() {
+    const a = requireA();
+    if (a.state !== "active") throw new Error("A 必须是 active 才能模拟异常断开");
+    a.disconnectAbnormal();
+    edgeLog("已发送 close 3001（浏览器不允许发 1001），等待 session.state=grace...");
+    await sleep(400);
+    edgeLog(`A 状态=${a.state}`);
+  }
+
+  async function edgeNormalClose() {
+    if (!state.slots.A) throw new Error("A 未打开");
+    await closeSlot("A", true);
+    edgeLog("A 已正常关闭 1000，端口应已释放");
+  }
+
+
   const tabs = $$("[data-demo-tab]");
   const panels = $$(".demo-panel");
   let current = "overview";
@@ -1048,6 +1379,47 @@ export function createDemo(root, client) {
     $("#demo-btn-event-export").addEventListener("click", () => {
       download(`ws2s-events-${Date.now()}.json`, JSON.stringify(state.events, null, 2), "application/json");
     });
+    $("#demo-debug-all").addEventListener("change", () => {
+      state.debug.all = $("#demo-debug-all").checked;
+      renderDebugOptions();
+    });
+    $("#demo-btn-debug-subscribe").addEventListener("click", () => {
+      subscribeDebug().catch((err) => logEvent("error", err.message));
+    });
+    $("#demo-btn-debug-unsubscribe").addEventListener("click", () => {
+      unsubscribeDebug().catch((err) => logEvent("error", err.message));
+    });
+    $("#demo-btn-debug-export").addEventListener("click", exportDebug);
+    $("#demo-btn-debug-clear").addEventListener("click", () => {
+      state.debug.frames.length = 0;
+      state.debug.gaps = 0;
+      state.debug.lastSeq.clear();
+      renderDebugFrames();
+    });
+    $("#demo-btn-debug-write").addEventListener("click", () => {
+      debugWrite().catch((err) => {
+        $("#demo-debug-write-result").textContent = err.message;
+        logEvent("error", err.message);
+      });
+    });
+    $$("[data-edge]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const handlers = {
+          "second-client": edgeSecondClient,
+          "active-open": edgeActiveOpen,
+          "bad-token": edgeBadToken,
+          "missing-port": edgeMissingPort,
+          "write-inactive": edgeWriteInactive,
+          "unknown-action": edgeUnknownAction,
+          "text-frame": edgeTextFrame,
+          oversize: edgeOversize,
+          abnormal: edgeAbnormal,
+          "normal-close": edgeNormalClose,
+        };
+        const fn = handlers[btn.dataset.edge];
+        if (fn) Promise.resolve().then(fn).catch((err) => edgeLog(`失败: ${err.message}`));
+      });
+    });
   }
 
   function renderOrigin() {
@@ -1089,6 +1461,8 @@ export function createDemo(root, client) {
   renderAdmin();
   renderEvents();
   renderTerminal();
+  renderDebugOptions();
+  renderDebugFrames();
   activate(current);
   setInterval(() => {
     for (const slot of ["A", "B"]) state.slots[slot]?._renderMeta();
@@ -1099,6 +1473,10 @@ export function createDemo(root, client) {
     onShow() {
       activate(current);
       renderTerminal();
+      if (current === "debug") {
+        renderDebugOptions();
+        renderDebugFrames();
+      }
     },
   };
 }
