@@ -31,6 +31,20 @@ fn websocket_trace_hooks_capture_raw_traffic_safely() {
     run_assistant_js_behavior("trace");
 }
 
+/// `ports.list` 刷新必须向调用方报告结果，失败时保留旧快照。
+#[test]
+fn management_refresh_ports_reports_success() {
+    run_assistant_js_behavior("refresh");
+}
+
+/// 助手页提供手动重扫串口入口。
+#[test]
+fn assistant_can_refresh_ports_on_demand() {
+    let html = include_str!("../src/assets/assistant.html");
+    assert!(html.contains("id=\"assistant-refresh-ports\""));
+    assert!(html.contains(">刷新串口</button>"));
+}
+
 /// 本机 HTTP 客户端。固定 `no_proxy()`，避免开发机系统代理拦截 `127.0.0.1` 请求。
 fn client() -> reqwest::Client {
     reqwest::Client::builder()

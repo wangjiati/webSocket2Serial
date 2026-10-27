@@ -148,8 +148,10 @@ export class ManagementClient {
       const data = await this.request("ports.list", {});
       this.ports = (data && data.ports) || [];
       this.notifySync();
+      return true;
     } catch (err) {
       // 连接中断等：保持旧数据。
+      return false;
     }
   }
 

@@ -335,9 +335,28 @@ async function refreshPorts(client) {
   if (client.ports.length) {
     renderPorts(client.ports);
   }
-  if (!client.connected) return;
-  await client.refreshPorts();
+  if (!client.connected) return false;
+  const ok = await client.refreshPorts();
   renderPorts(client.ports);
+  return ok;
+}
+
+async function refreshPortsFromButton(client) {
+  if (!client.connected) {
+    setOpenResult("管理 WS 未连接，无法刷新串口");
+    return;
+  }
+  const button = $("#assistant-refresh-ports");
+  button.disabled = true;
+  setOpenResult("正在刷新串口…");
+  try {
+    const ok = await refreshPorts(client);
+    setOpenResult(ok ? `已刷新，检测到 ${client.ports.length} 个串口` : "刷新串口失败，请稍后重试");
+  } catch (err) {
+    setOpenResult("刷新串口失败，请稍后重试");
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function savePrefs(params) {
@@ -664,6 +683,7 @@ async function reconnectSerial(client) {
 }
 
 function bindUI(client) {
+  $("#assistant-refresh-ports").addEventListener("click", () => refreshPortsFromButton(client));
   $("#assistant-open").addEventListener("click", () => openSerial(client));
   $("#assistant-close").addEventListener("click", () => closeSerial(client));
   $("#assistant-reconnect").addEventListener("click", () => reconnectSerial(client));

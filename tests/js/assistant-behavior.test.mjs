@@ -172,15 +172,43 @@ async function testSerialTrace() {
   }
 }
 
-async function runTrace() {
+async function testRefreshPorts() {
+  const ManagementClient = await loadManagementClient();
+  const client = new ManagementClient(8765);
+  let syncCount = 0;
+  client.onSync(() => { syncCount += 1; });
+  client.request = async (action, params) => {
+    assert.equal(action, "ports.list");
+    assert.deepEqual(params, {});
+    return { ports: [{ path: "COM7" }] };
+  };
+
+  const refreshed = await client.refreshPorts();
+  assert.equal(refreshed, true);
+  assert.deepEqual(client.ports, [{ path: "COM7" }]);
+  assert.equal(syncCount, 1);
+
+  const previousPorts = client.ports;
+  client.request = async () => {
+    throw new Error("connection lost");
+  };
+  const failed = await client.refreshPorts();
+  assert.equal(failed, false);
+  assert.equal(client.ports, previousPorts);
+  assert.deepEqual(client.ports, [{ path: "COM7" }]);
+  assert.equal(syncCount, 1);
+  console.log("refresh behavior: ok");
+}
+
+const selected = process.argv[2] || "all";
+if (!["trace", "refresh", "panel", "all"].includes(selected)) {
+  throw new Error(`unknown behavior test case: ${selected}`);
+}
+if (selected === "trace" || selected === "all") {
   await testManagementTrace();
   await testSerialTrace();
   console.log("trace behavior: ok");
 }
-
-const selected = process.argv[2] || "all";
-if (selected === "trace" || selected === "all") {
-  await runTrace();
-} else if (!["refresh", "panel"].includes(selected)) {
-  throw new Error(`unknown behavior test case: ${selected}`);
+if (selected === "refresh" || selected === "all") {
+  await testRefreshPorts();
 }
