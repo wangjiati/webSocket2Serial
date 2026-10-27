@@ -77,7 +77,7 @@
 
 运行：`cargo test --test admin_assets websocket_trace_hooks_capture_raw_traffic_safely -- --exact`
 
-预期：FAIL，首先报告缺少 `this.traceHandlers = new Set()` 或后续 trace 契约。
+预期：FAIL，Node 行为测试首先因 `ManagementClient.onTrace` 尚不存在（或后续真实 trace 行为缺失）而失败；Rust 包装测试打印该 stdout/stderr。
 
 - [ ] **步骤 3：实现 `ManagementClient` 管理面 trace**
 
