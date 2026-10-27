@@ -20,15 +20,15 @@
 - trace 回调必须异常隔离，不能改变现有连接、重连、收发、超时行为。
 - WS 报文缓冲上限为 **2000 条**；收起或暂停时仍捕获到内存，超出丢弃最旧记录。
 - 数据 WS 的二进制发送只记录字节数，串口负载仍由原有串口日志显示。
-- 使用现有 Rust 静态资源测试风格；不引入 Node、npm 或新的测试依赖。
+- HTML 使用现有 Rust 静态资源控制点测试；JS 行为复用仓库已有的可选 Node 运行方式，只用 Node 内置模块执行真实源码，不引入 npm、jsdom 或新的测试依赖。
 
 ## 审查重点（Review Focus）
 
 1. **trace 回调抛异常：** 正常 `ws.send`、入站分发、数据 WS 关闭和重连仍应完成；任务 1 的异常隔离契约测试与实现检查覆盖。
-2. **自动 `session.list` 轮询在面板收起/暂停时持续到达：** 内存仍按时间记录但 DOM 不增长，恢复后能看到记录且总数不超过 2000；任务 3 的状态/渲染契约测试和手工暂停、收起检查覆盖。
-3. **`ports.list`、`session.list` 等请求并发且回应乱序：** 每条回应按 `id` 显示原请求的 action，不错标为最后发出的 action；任务 1 的 pending-action 契约测试与任务 3 的打开串口往返检查覆盖。
-4. **管理 WS 断开时手动刷新，且输入框已有手工串口号：** 显示失败/未连接提示，不伪报成功，不覆盖输入；任务 2 的返回值、提示与既有 `renderPorts` 保护检查覆盖。
-5. **原文 JSON 或错误文本含 `<img>`、`<script>` 等字符：** 报文只作为文本显示，不成为 HTML；任务 3 的 `textContent`/禁用 `innerHTML` 断言覆盖。
+2. **自动 `session.list` 轮询在面板收起/暂停时持续到达：** 内存仍按时间记录但 DOM 不增长，恢复后能看到记录且总数不超过 2000；任务 3 的 `pushCapped` 行为测试和手工暂停、收起检查覆盖。
+3. **`ports.list`、`session.list` 等请求并发且回应乱序：** 每条回应按 `id` 显示原请求的 action，不错标为最后发出的 action；任务 1 的乱序回应行为测试与任务 3 的打开串口往返检查覆盖。
+4. **管理 WS 断开时手动刷新，且输入框已有手工串口号：** 显示失败/未连接提示，不伪报成功，不覆盖输入；任务 2 的成功/失败返回值行为测试和真实页面检查覆盖。
+5. **原文 JSON 或错误文本含 `<img>`、`<script>` 等字符：** 报文只作为文本显示，不成为 HTML；任务 3 的恶意串口名真实页面检查覆盖。
 
 ---
 
@@ -37,9 +37,11 @@
 - 修改 `src/assets/js/api.js`：管理 WS 原文/连接 trace 钩子；`refreshPorts()` 返回本次是否成功。
 - 修改 `src/assets/js/serial.js`：数据 WS 连接、发送、关闭 trace 钩子。
 - 修改 `src/assets/js/assistant-page.js`：串口助手 trace 状态、渲染、暂停/清空/导出，以及刷新按钮行为。
+- 修改 `src/assets/js/format.js`：提供面板实际使用的 `pushCapped(items, item, limit)` 有界数组辅助函数。
 - 修改 `src/assets/assistant.html`：刷新按钮和默认收起的 WS 报文面板。
 - 修改 `src/assets/style.css`：WS 报文行、面板高度、操作类型与方向样式。
-- 修改 `tests/admin_assets.rs`：新 DOM 控制点、trace 契约和原文安全断言。
+- 修改 `tests/admin_assets.rs`：新 DOM 控制点，以及调用 Node 行为测试的 Rust 测试入口。
+- 创建：`tests/js/assistant-behavior.test.mjs`：用 Node 内置断言和假 WebSocket 执行真实 `api.js`/`serial.js`，验证 trace 与刷新行为。
 - 修改 `README.md`：串口助手能力说明。
 
 ### 任务 1：共享 WebSocket trace 钩子
@@ -59,38 +61,17 @@
 
 数据面 entry 的 `channel` 为 `"data"`，其余字段相同。此时不附 `ts`，由任务 3 的页面统一加时间戳。`ManagementClient.onTrace(cb)` 与现有 `onEvent(cb)` 一样只注册、不返回；`SerialSession` 通过 `hooks.onTrace` 接收。
 
-- [ ] **步骤 1：编写失败的静态契约测试**
+- [ ] **步骤 1：编写失败的行为测试**
 
-在 `tests/admin_assets.rs` 增加 `websocket_trace_hooks_capture_raw_traffic_safely`，至少断言：
+创建 `tests/js/assistant-behavior.test.mjs`，用 `node:assert/strict` 和 Node 内置模块执行真实源码，不测试源码文本：
 
-```rust
-let api = include_str!("../src/assets/js/api.js");
-for needle in [
-    "this.traceHandlers = new Set()",
-    "onTrace(cb)",
-    "emitTrace(entry)",
-    "const raw = JSON.stringify(payload)",
-    "this.ws.send(raw)",
-    "this.pending.get(msg.id)?.action",
-    "kind: \"invalid\"",
-] {
-    assert!(api.contains(needle), "管理 WS trace 缺少：{needle}");
-}
+- `api.js` 无相对 import，可通过 `data:` URL 动态 import；`serial.js` 与 `format.js` 复制到临时目录为 `.mjs`，只把 import 路径改为 `./format.mjs` 后 import。测试结束清理临时目录。
+- 假 WebSocket 只替代浏览器外部边界，提供 `OPEN=1`、构造器、`send`、`close` 和事件回调；真实 `ManagementClient`/`SerialSession` 逻辑不替换。
+- trace 用例：并发发出 `ports.list` 与 `session.list`，按相反顺序回应，断言原始发送字符串与 trace 文本完全一致，回应分别标为 `ports.list ok`、`session.list ok`；无效 JSON 产生 `kind=invalid` 且不抛出；首个 trace 回调抛错时第二个仍收到记录，请求/回应仍完成。
+- 数据面用例：实际调用 `connectData()`、`sendBytes(Uint8Array.of(1,2,3))` 和 `ws.onclose`，断言依次出现 `data.connecting`、`data.open`、`data.send`（正文 `3 B`）、`data.close`（含实际 code/reason）；hook 抛错时发送和 frames 记录仍完成。
+- 脚本以 `process.argv[2]` 选择 `trace`、`refresh`、`panel` 或默认 `all`（任务 2/3 逐步补充对应用例）。
 
-let serial = include_str!("../src/assets/js/serial.js");
-for needle in [
-    "onTrace?:",
-    "_trace(dir, kind, text)",
-    "data.connecting",
-    "data.open",
-    "data.send",
-    "data.close",
-] {
-    assert!(serial.contains(needle), "数据 WS trace 缺少：{needle}");
-}
-```
-
-另断言两个文件都保留 trace 回调的 `try`/`catch` 隔离，且 `serial.js` 使用 `this.hooks.onTrace?.` 可选调用。
+在 `tests/admin_assets.rs` 增加 Node 运行辅助函数：Node 不可用时按仓库现有可选测试惯例跳过，否则运行 `node tests/js/assistant-behavior.test.mjs <case>`，失败时打印 stdout/stderr 并 assert。新增 `websocket_trace_hooks_capture_raw_traffic_safely` 调用 `trace` 用例。
 
 - [ ] **步骤 2：运行测试验证失败**
 
@@ -123,14 +104,12 @@ for needle in [
 
 运行：`cargo test --test admin_assets`
 
-预期：PASS，包括新增契约测试和该文件原有测试。
-
-再在已打开的任一管理工具页 DevTools 控制台动态 `import("/js/api.js")`：给一个新的 `ManagementClient` 注册两个 trace 回调，第一个主动抛错、第二个设置标记，调用 `emitTrace({})` 后确认第二个仍执行。对 `SerialSession` 传入会抛错的 `hooks.onTrace` 并直接调用 `_trace("event", "test", "test")`，确认异常没有向外抛出。此检查不连接真实 WS，也不保存调试代码到产品文件。
+预期：PASS，包括新增行为测试和该文件原有测试。Node 行为测试已覆盖回调异常隔离，无需另做 DevTools 钩子检查。
 
 - [ ] **步骤 6：Commit**
 
 ```bash
-git add src/assets/js/api.js src/assets/js/serial.js tests/admin_assets.rs
+git add src/assets/js/api.js src/assets/js/serial.js tests/admin_assets.rs tests/js/assistant-behavior.test.mjs
 git commit -m "feat: add websocket trace hooks"
 ```
 
@@ -148,29 +127,21 @@ git commit -m "feat: add websocket trace hooks"
 
 - [ ] **步骤 1：编写失败的测试**
 
-在 `tests/admin_assets.rs` 增加 `assistant_can_refresh_ports_on_demand`：
+在 `tests/js/assistant-behavior.test.mjs` 增加 `refresh` 用例，直接对真实 `ManagementClient.refreshPorts()` 提供可控的 `request()` 替身：
 
-```rust
-let html = include_str!("../src/assets/assistant.html");
-assert!(html.contains("id=\"assistant-refresh-ports\""));
-let js = include_str!("../src/assets/js/assistant-page.js");
-for needle in [
-    "async function refreshPortsFromButton(client)",
-    "const ok = await refreshPorts(client)",
-    "管理 WS 未连接，无法刷新串口",
-    "刷新串口失败，请稍后重试",
-] {
-    assert!(js.contains(needle), "手动刷新缺少：{needle}");
-}
-```
+- 成功返回 `{ports:[{path:"COM7"}]}` 时，结果为 `true`，`client.ports` 更新，且 sync 回调执行一次。
+- 请求抛错时，结果为 `false`，刷新前的 `client.ports` 保持不变。
 
-同时保留/补充 `renderPorts` 只在输入框为空时自动填第一个串口的断言，防止刷新覆盖手工输入。
+在 `tests/admin_assets.rs` 增加 `management_refresh_ports_reports_success` 调用 Node `refresh` 用例；另增加 `assistant_can_refresh_ports_on_demand`，断言 HTML 含 `id="assistant-refresh-ports"` 和按钮文本 `刷新串口`。不要对 JS 源码字符串做断言；按钮提示和输入保护由步骤 6 的真实页面检查验收。
 
 - [ ] **步骤 2：运行测试验证失败**
 
-运行：`cargo test --test admin_assets assistant_can_refresh_ports_on_demand -- --exact`
+分别运行：
 
-预期：FAIL，报告缺少 `assistant-refresh-ports`。
+- `cargo test --test admin_assets management_refresh_ports_reports_success -- --exact`
+- `cargo test --test admin_assets assistant_can_refresh_ports_on_demand -- --exact`
+
+预期：前者因现有 `refreshPorts()` 成功时返回 `undefined` 而非 `true` 失败；后者因缺少 `assistant-refresh-ports` 失败。
 
 - [ ] **步骤 3：实现可报告结果的端口刷新**
 
@@ -204,7 +175,7 @@ for needle in [
 - [ ] **步骤 7：Commit**
 
 ```bash
-git add src/assets/js/api.js src/assets/js/assistant-page.js src/assets/assistant.html tests/admin_assets.rs
+git add src/assets/js/api.js src/assets/js/assistant-page.js src/assets/assistant.html tests/admin_assets.rs tests/js/assistant-behavior.test.mjs
 git commit -m "feat: add manual serial port refresh"
 ```
 
@@ -213,8 +184,10 @@ git commit -m "feat: add manual serial port refresh"
 **文件：**
 - 修改：`src/assets/assistant.html`
 - 修改：`src/assets/js/assistant-page.js`
+- 修改：`src/assets/js/format.js`
 - 修改：`src/assets/style.css`
 - 修改：`tests/admin_assets.rs`
+- 修改：`tests/js/assistant-behavior.test.mjs`
 - 修改：`README.md`
 
 **DOM 与状态接口：**
@@ -223,42 +196,25 @@ git commit -m "feat: add manual serial port refresh"
 
 页面状态增加 `traces: []`、`tracePaused: false`、`traceShowTs: true`，模块常量 `TRACE_LIMIT = 2000`。任务 1 entry 到页面后统一变为 `{...entry, ts: Date.now()}`。
 
-- [ ] **步骤 1：编写失败的面板与原文安全测试**
+- [ ] **步骤 1：编写失败的面板控制点测试**
 
-在 `tests/admin_assets.rs` 增加 `assistant_has_chronological_ws_trace_panel`：
+在 `tests/admin_assets.rs` 增加 `assistant_has_chronological_ws_trace_panel`，对真实 `assistant.html` 断言：
 
-```rust
-let html = include_str!("../src/assets/assistant.html");
-for id in [
-    "assistant-ws-trace",
-    "assistant-ws-trace-ts",
-    "assistant-ws-trace-pause",
-    "assistant-ws-trace-clear",
-    "assistant-ws-trace-export",
-    "assistant-ws-trace-note",
-    "assistant-ws-trace-log",
-] {
-    assert!(html.contains(&format!("id=\"{id}\"")), "missing {id}");
-}
-let js = include_str!("../src/assets/js/assistant-page.js");
-for needle in [
-    "const TRACE_LIMIT = 2000",
-    "function recordTrace(entry)",
-    "function renderTrace()",
-    "client.onTrace(recordTrace)",
-    "onTrace: recordTrace",
-    "textContent = trace.text",
-] {
-    assert!(js.contains(needle), "WS 报文面板缺少：{needle}");
-}
-assert!(!js.contains("innerHTML"), "报文原文必须使用 textContent");
-```
+- 存在 `assistant-ws-trace`、`assistant-ws-trace-ts`、`assistant-ws-trace-pause`、`assistant-ws-trace-clear`、`assistant-ws-trace-export`、`assistant-ws-trace-note`、`assistant-ws-trace-log` 这些 id。
+- `assistant-ws-trace` 是默认收起的 `<details>`（开始标签没有 `open` 属性），面板含 `/help` 链接与说明文本。
+
+另在 Node 脚本增加 `panel` 用例，并在 `tests/admin_assets.rs` 增加 `assistant_trace_buffer_is_capped` 调用它：对真实 `format.js` 导出的 `pushCapped(items, item, limit)` 连续插入 2001 条（limit=2000），断言长度为 2000、首条是原来的第 2 条、末条是第 2001 条；再用小 limit 验证同一行为。
+
+不要对 JS 源码字符串做断言。`recordTrace` 的时序、暂停/收起、原文 textContent 与导出行为由步骤 8 的真实页面验收；本次不引入 jsdom。
 
 - [ ] **步骤 2：运行测试验证失败**
 
-运行：`cargo test --test admin_assets assistant_has_chronological_ws_trace_panel -- --exact`
+分别运行：
 
-预期：FAIL，报告缺少 WS trace DOM id。
+- `cargo test --test admin_assets assistant_has_chronological_ws_trace_panel -- --exact`
+- `cargo test --test admin_assets assistant_trace_buffer_is_capped -- --exact`
+
+预期：前者报告缺少 WS trace DOM id；后者因 `format.js` 尚未导出 `pushCapped` 而失败。
 
 - [ ] **步骤 3：添加默认收起的面板 HTML**
 
@@ -273,13 +229,14 @@ assert!(!js.contains("innerHTML"), "报文原文必须使用 textContent");
 
 在 `src/assets/js/assistant-page.js` 中实现以下函数，DOM 文本一律用 `textContent`：
 
-1. `recordTrace(entry)`：复制 entry 并附 `ts:Date.now()`，按到达顺序 push 到 `state.traces`；超过 `TRACE_LIMIT` 时从最旧端裁剪。只有「未暂停且 details 已展开」时追加 DOM，因此收起/暂停不会停止内存捕获。
-2. `traceLineElement(trace)`：一行四列——时间戳、方向、操作类型、原文/描述；方向映射 `out→→`、`in→←`、`event→—`。时间戳列按 `state.traceShowTs` 填 `fmtTime(trace.ts)` 或空字符串，kind 与 `trace.text` 均保持完整文本。
-3. `renderTrace()`：清空并重绘当前缓冲，空时显示 `暂无 WS 报文`；展开状态下绘制后滚到底部。`updateTraceNote()` 在达到 2000 条时显示 `WS 报文缓冲已满（2000 条），已丢弃最旧数据`，否则隐藏。
-4. details 的 `toggle`：展开且未暂停时 `renderTrace()`；收起不清空 state。
-5. 暂停按钮：切换 `tracePaused` 和「暂停/继续」文案；继续时重绘。清空按钮只清 `state.traces` 和报文 DOM，不动 `session.frames`。时间戳切换后重绘。
-6. 导出：无记录时不下载；有记录时用 `download()` 生成 `ws2s-assistant-ws-${Date.now()}.txt`，每行为 `fmtTime(ts)\t方向\tkind\ttext`。
-7. `main()` 在 `client.connect()` 前注册 `client.onTrace(recordTrace)`；`openSerial()` 的 `SerialSession` hooks 增加 `onTrace: recordTrace`。这样 hello、自动对齐和打开串口全过程都会按到达顺序进入同一缓冲。
+1. 在 `format.js` 导出 `pushCapped(items, item, limit)`：追加 item，并从最旧端裁剪到 `items.length <= limit`，不改变其他元素顺序。`assistant-page.js` 导入它。
+2. `recordTrace(entry)`：复制 entry 并附 `ts:Date.now()`，调用 `pushCapped(state.traces, trace, TRACE_LIMIT)` 按到达顺序记录。只有「未暂停且 details 已展开」时追加 DOM，因此收起/暂停不会停止内存捕获。
+3. `traceLineElement(trace)`：一行四列——时间戳、方向、操作类型、原文/描述；方向映射 `out→→`、`in→←`、`event→—`。时间戳列按 `state.traceShowTs` 填 `fmtTime(trace.ts)` 或空字符串，kind 与 `trace.text` 均保持完整文本。
+4. `renderTrace()`：清空并重绘当前缓冲，空时显示 `暂无 WS 报文`；展开状态下绘制后滚到底部。`updateTraceNote()` 在达到 2000 条时显示 `WS 报文缓冲已满（2000 条），已丢弃最旧数据`，否则隐藏。
+5. details 的 `toggle`：展开且未暂停时 `renderTrace()`；收起不清空 state。
+6. 暂停按钮：切换 `tracePaused` 和「暂停/继续」文案；继续时重绘。清空按钮只清 `state.traces` 和报文 DOM，不动 `session.frames`。时间戳切换后重绘。
+7. 导出：无记录时不下载；有记录时用 `download()` 生成 `ws2s-assistant-ws-${Date.now()}.txt`，每行为 `fmtTime(ts)\t方向\tkind\ttext`。
+8. `main()` 在 `client.connect()` 前注册 `client.onTrace(recordTrace)`；`openSerial()` 的 `SerialSession` hooks 增加 `onTrace: recordTrace`。这样 hello、自动对齐和打开串口全过程都会按到达顺序进入同一缓冲。
 
 - [ ] **步骤 5：添加面板样式**
 
@@ -315,6 +272,6 @@ assert!(!js.contains("innerHTML"), "报文原文必须使用 textContent");
 - [ ] **步骤 9：Commit**
 
 ```bash
-git add src/assets/assistant.html src/assets/js/assistant-page.js src/assets/style.css tests/admin_assets.rs README.md
+git add src/assets/assistant.html src/assets/js/assistant-page.js src/assets/js/format.js src/assets/style.css tests/admin_assets.rs tests/js/assistant-behavior.test.mjs README.md
 git commit -m "feat: add assistant websocket message viewer"
 ```
