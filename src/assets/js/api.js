@@ -34,6 +34,7 @@ export class ManagementClient {
     this.reconnectTimer = null;
     this.pending = new Map();
     this.eventHandlers = new Set();
+    this.traceHandlers = new Set();
     this.syncHandlers = new Set();
     this.connectionHandlers = new Set();
     this.subscription = null;
@@ -64,12 +65,15 @@ export class ManagementClient {
     ws.onopen = () => {
       this.connected = true;
       this.reconnectAttempts = 0;
+      this.emitTrace({ channel: "mgmt", dir: "event", kind: "connect", text: this.url });
       this.emitConnection(true);
     };
     ws.onmessage = (evt) => {
       this.handleMessage(evt.data);
     };
-    ws.onclose = () => {
+    ws.onclose = (event) => {
+      const reason = event.reason ? ` ${event.reason}` : "";
+      this.emitTrace({ channel: "mgmt", dir: "event", kind: "disconnect", text: `code=${event.code}${reason}` });
       this.handleClose();
     };
     ws.onerror = () => {
@@ -82,8 +86,17 @@ export class ManagementClient {
     try {
       msg = JSON.parse(raw);
     } catch (err) {
+      this.emitTrace({ channel: "mgmt", dir: "in", kind: "invalid", text: String(raw) });
       return;
     }
+    let kind = "message";
+    if (msg && typeof msg.event === "string") {
+      kind = `event:${msg.event}`;
+    } else if (msg && Object.prototype.hasOwnProperty.call(msg, "id")) {
+      const action = this.pending.get(msg.id)?.action;
+      kind = action ? `${action} ${msg.ok ? "ok" : "error"}` : "response";
+    }
+    this.emitTrace({ channel: "mgmt", dir: "in", kind, text: String(raw) });
     if (msg && typeof msg.event === "string") {
       this.dispatchEvent(msg.event, msg.data);
     } else if (msg && Object.prototype.hasOwnProperty.call(msg, "id")) {
@@ -195,6 +208,7 @@ export class ManagementClient {
 
   request(action, params) {
     const payload = { id: nextId(), action, params: params || {} };
+    const raw = JSON.stringify(payload);
     return new Promise((resolve, reject) => {
       if (!this.connected || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
         reject(new Error(`未连接管理服务（${action}）`));
@@ -204,9 +218,10 @@ export class ManagementClient {
         this.pending.delete(payload.id);
         reject(new Error(`请求超时（${action}）`));
       }, REQUEST_TIMEOUT_MS);
-      this.pending.set(payload.id, { resolve, reject, timer });
+      this.pending.set(payload.id, { resolve, reject, timer, action });
       try {
-        this.ws.send(JSON.stringify(payload));
+        this.ws.send(raw);
+        this.emitTrace({ channel: "mgmt", dir: "out", kind: action, text: raw });
       } catch (err) {
         clearTimeout(timer);
         this.pending.delete(payload.id);
@@ -235,6 +250,20 @@ export class ManagementClient {
 
   onEvent(cb) {
     this.eventHandlers.add(cb);
+  }
+
+  onTrace(cb) {
+    this.traceHandlers.add(cb);
+  }
+
+  emitTrace(entry) {
+    for (const cb of this.traceHandlers) {
+      try {
+        cb(entry);
+      } catch (err) {
+        // 观察回调异常不应中断协议收发。
+      }
+    }
   }
 
   onSync(cb) {

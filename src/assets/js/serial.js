@@ -9,7 +9,7 @@ export class SerialSession {
    * @param {{sessionId:string,dataUrl:string,state?:string,counters?:object}} info
    * @param {object} params session.open 参数
    * @param {import("./api.js").ManagementClient} client
-   * @param {{onFrame?:(frame:object)=>void,onState?:(session:object)=>void,onLog?:(level:string,message:string)=>void}} hooks
+   * @param {{onFrame?:(frame:object)=>void,onState?:(session:object)=>void,onLog?:(level:string,message:string)=>void,onTrace?:(entry:object)=>void}} hooks
    */
   constructor(slot, info, params, client, hooks = {}) {
     this.slot = slot;
@@ -41,6 +41,14 @@ export class SerialSession {
     this.hooks.onLog?.(level, message);
   }
 
+  _trace(dir, kind, text) {
+    try {
+      this.hooks.onTrace?.({ channel: "data", dir, kind, text });
+    } catch (err) {
+      // 观察回调异常不应中断数据收发与状态迁移。
+    }
+  }
+
   _notifyState() {
     this.hooks.onState?.(this);
   }
@@ -51,6 +59,7 @@ export class SerialSession {
     this.connecting = true;
     const url = this.dataUrl;
     return new Promise((resolve, reject) => {
+      this._trace("event", "data.connecting", url.split("/").pop() || url);
       const ws = new WebSocket(url);
       ws.binaryType = "arraybuffer";
       this.ws = ws;
@@ -73,6 +82,7 @@ export class SerialSession {
         clearTimeout(timer);
         this.state = "active";
         this.closeCode = null;
+        this._trace("event", "data.open", url.split("/").pop() || url);
         this._notifyState();
         this._log("ok", `${this.slot} 数据 WS 已连接 (${url.split("/").pop()?.slice(0, 8)})`);
         resolve();
@@ -96,6 +106,8 @@ export class SerialSession {
       };
       ws.onclose = (event) => {
         this.connecting = false;
+        const reason = event.reason ? ` ${event.reason}` : "";
+        this._trace("event", "data.close", `code=${event.code}${reason}`);
         this.closeCode = event.code;
         this.closeReason = event.reason || "";
         this.state = [1000, 4001, 4004, 4005, 4007].includes(event.code) ? "closed" : "grace";
@@ -203,6 +215,7 @@ export class SerialSession {
       throw new Error(`${this.slot} 数据 WS 未连接`);
     }
     this.ws.send(bytes);
+    this._trace("out", "data.send", `${bytes.length} B`);
     this._appendFrame("TX", bytes);
   }
 

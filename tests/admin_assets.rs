@@ -1,7 +1,35 @@
 //! 管理页静态资源：必要的 DOM 控制点、无外部 CDN、JS 固定回环地址与重连逻辑，
 //! 以及 `/js/*` 静态分发。
 
+use std::process::Command;
+
 use websocket2serial::http::AdminService;
+
+/// 使用仓库已有的可选 Node 环境运行真实管理页 JS 行为测试。
+fn run_assistant_js_behavior(case: &str) {
+    let output = match Command::new("node")
+        .args(["tests/js/assistant-behavior.test.mjs", case])
+        .output()
+    {
+        Ok(output) => output,
+        Err(err) => {
+            eprintln!("跳过：无法执行 node（{err}）");
+            return;
+        }
+    };
+    assert!(
+        output.status.success(),
+        "JS 行为用例 {case} 失败\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// 管理/数据 WS trace 必须保留原文、关联乱序回应并隔离观察回调异常。
+#[test]
+fn websocket_trace_hooks_capture_raw_traffic_safely() {
+    run_assistant_js_behavior("trace");
+}
 
 /// 本机 HTTP 客户端。固定 `no_proxy()`，避免开发机系统代理拦截 `127.0.0.1` 请求。
 fn client() -> reqwest::Client {
