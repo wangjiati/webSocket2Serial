@@ -45,6 +45,35 @@ fn assistant_can_refresh_ports_on_demand() {
     assert!(html.contains(">刷新串口</button>"));
 }
 
+/// WS 报文面板提供完整控制点，默认收起并链接协议帮助。
+#[test]
+fn assistant_has_chronological_ws_trace_panel() {
+    let html = include_str!("../src/assets/assistant.html");
+    for id in [
+        "assistant-ws-trace",
+        "assistant-ws-trace-ts",
+        "assistant-ws-trace-pause",
+        "assistant-ws-trace-clear",
+        "assistant-ws-trace-export",
+        "assistant-ws-trace-note",
+        "assistant-ws-trace-log",
+    ] {
+        assert!(html.contains(&format!("id=\"{id}\"")), "missing {id}");
+    }
+    assert!(html.contains(
+        "<details id=\"assistant-ws-trace\" class=\"card assistant-trace\">"
+    ));
+    let panel = html.split("<details id=\"assistant-ws-trace\"").nth(1).unwrap();
+    assert!(panel.contains("观察管理 WS 与数据 WS 的报文原文"));
+    assert!(panel.contains("href=\"/help\""));
+}
+
+/// 面板使用的有界缓冲必须在第 2001 条到来时丢弃最旧记录。
+#[test]
+fn assistant_trace_buffer_is_capped() {
+    run_assistant_js_behavior("panel");
+}
+
 /// 本机 HTTP 客户端。固定 `no_proxy()`，避免开发机系统代理拦截 `127.0.0.1` 请求。
 fn client() -> reqwest::Client {
     reqwest::Client::builder()

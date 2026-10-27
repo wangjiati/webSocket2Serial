@@ -2,11 +2,13 @@
 
 import { getConfig, ManagementClient } from "./api.js";
 import { SerialSession } from "./serial.js";
-import { fmtTime, bytesToHex, bytesToAscii, hexToBytes, download } from "./format.js";
+import { fmtTime, bytesToHex, bytesToAscii, hexToBytes, download, pushCapped } from "./format.js";
 
 const $ = (selector) => document.querySelector(selector);
 
 const EOL = { none: "", crlf: "\r\n", lf: "\n", cr: "\r" };
+const TRACE_LIMIT = 2000;
+const TRACE_DIRECTIONS = { out: "→", in: "←", event: "—" };
 const LS = {
   params: "ws2s.assistant.params.v1",
   history: "ws2s.assistant.history.v1",
@@ -36,6 +38,9 @@ const state = {
   timerSent: 0,
   timerCount: 0,
   statsTimer: null,
+  traces: [],
+  tracePaused: false,
+  traceShowTs: true,
 };
 
 function loadJSON(key, fallback) {
@@ -266,6 +271,76 @@ function updateBufferNote() {
   const full = session.frames.length >= 5000 || session.frameBytes >= 4 * 1024 * 1024;
   note.hidden = !full;
   note.textContent = full ? "客户端缓冲已满（5000 帧或 4 MiB），已丢弃最旧数据" : "";
+}
+
+function traceDirection(trace) {
+  return TRACE_DIRECTIONS[trace.dir] || "—";
+}
+
+function traceLineElement(trace) {
+  const line = document.createElement("div");
+  line.className = "assistant-trace-line";
+  const ts = document.createElement("span");
+  ts.className = "ts";
+  ts.textContent = state.traceShowTs ? fmtTime(trace.ts) : "";
+  const dir = document.createElement("span");
+  dir.className = `dir ${trace.dir === "out" ? "tx" : trace.dir === "in" ? "rx" : "event"}`;
+  dir.textContent = traceDirection(trace);
+  const kind = document.createElement("span");
+  kind.className = "kind";
+  kind.textContent = trace.kind;
+  const body = document.createElement("span");
+  body.className = "body";
+  body.textContent = trace.text;
+  line.append(ts, dir, kind, body);
+  return line;
+}
+
+function updateTraceNote() {
+  const note = $("#assistant-ws-trace-note");
+  const full = state.traces.length >= TRACE_LIMIT;
+  note.hidden = !full;
+  note.textContent = full ? "WS 报文缓冲已满（2000 条），已丢弃最旧数据" : "";
+}
+
+function appendTraceLine(trace) {
+  const box = $("#assistant-ws-trace-log");
+  box.querySelector(".assistant-empty")?.remove();
+  box.appendChild(traceLineElement(trace));
+  while (box.childElementCount > TRACE_LIMIT) box.firstElementChild?.remove();
+  box.scrollTop = box.scrollHeight;
+}
+
+function renderTrace() {
+  const box = $("#assistant-ws-trace-log");
+  box.textContent = "";
+  if (!state.traces.length) {
+    const empty = document.createElement("div");
+    empty.className = "assistant-empty";
+    empty.textContent = "暂无 WS 报文";
+    box.appendChild(empty);
+  } else {
+    const frag = document.createDocumentFragment();
+    for (const trace of state.traces) frag.appendChild(traceLineElement(trace));
+    box.appendChild(frag);
+  }
+  if ($("#assistant-ws-trace").open) box.scrollTop = box.scrollHeight;
+  updateTraceNote();
+}
+
+function recordTrace(entry) {
+  const trace = { ...entry, ts: Date.now() };
+  pushCapped(state.traces, trace, TRACE_LIMIT);
+  if (!state.tracePaused && $("#assistant-ws-trace").open) appendTraceLine(trace);
+  updateTraceNote();
+}
+
+function exportTrace() {
+  if (!state.traces.length) return;
+  const lines = state.traces.map(
+    (trace) => `${fmtTime(trace.ts)}\t${traceDirection(trace)}\t${trace.kind}\t${trace.text}`,
+  );
+  download(`ws2s-assistant-ws-${Date.now()}.txt`, lines.join("\n"));
 }
 
 function renderAll() {
@@ -632,6 +707,7 @@ async function openSerial(client) {
   const session = new SerialSession("A", { ...data, state: "awaiting" }, params, client, {
     onFrame: (frame) => appendFrame(frame),
     onState: () => renderSessionState(client),
+    onTrace: recordTrace,
     onLog: (level, message) => {
       if (level === "error" || level === "warn") {
         $("#assistant-last-error").textContent = message;
@@ -684,6 +760,24 @@ async function reconnectSerial(client) {
 
 function bindUI(client) {
   $("#assistant-refresh-ports").addEventListener("click", () => refreshPortsFromButton(client));
+  $("#assistant-ws-trace").addEventListener("toggle", () => {
+    if ($("#assistant-ws-trace").open && !state.tracePaused) renderTrace();
+  });
+  $("#assistant-ws-trace-pause").addEventListener("click", () => {
+    state.tracePaused = !state.tracePaused;
+    $("#assistant-ws-trace-pause").textContent = state.tracePaused ? "继续" : "暂停";
+    $("#assistant-ws-trace-pause").classList.toggle("active", state.tracePaused);
+    if (!state.tracePaused) renderTrace();
+  });
+  $("#assistant-ws-trace-clear").addEventListener("click", () => {
+    state.traces = [];
+    renderTrace();
+  });
+  $("#assistant-ws-trace-export").addEventListener("click", exportTrace);
+  $("#assistant-ws-trace-ts").addEventListener("change", () => {
+    state.traceShowTs = $("#assistant-ws-trace-ts").checked;
+    renderTrace();
+  });
   $("#assistant-open").addEventListener("click", () => openSerial(client));
   $("#assistant-close").addEventListener("click", () => closeSerial(client));
   $("#assistant-reconnect").addEventListener("click", () => reconnectSerial(client));
@@ -754,6 +848,7 @@ function bindUI(client) {
 async function main() {
   const config = await getConfig();
   const client = new ManagementClient(config.managementPort);
+  client.onTrace(recordTrace);
   loadPrefs();
   initEncoding();
   loadHistory();

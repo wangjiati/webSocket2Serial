@@ -1169,6 +1169,67 @@ button.active {
   font-size: 12px;
 }
 
+#assistant-page .assistant-trace {
+  margin-top: 14px;
+}
+
+#assistant-page .assistant-trace summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+#assistant-page .assistant-trace[open] summary {
+  margin-bottom: 10px;
+}
+
+#assistant-page .assistant-trace-log {
+  height: 320px;
+  overflow: auto;
+  background: #0f1115;
+  color: #d1d5db;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+#assistant-page .assistant-trace-line {
+  display: grid;
+  grid-template-columns: 96px 24px minmax(140px, 180px) minmax(0, 1fr);
+  gap: 8px;
+  padding: 1px 0;
+}
+
+#assistant-page .assistant-trace-line .ts,
+#assistant-page .assistant-trace-line .dir.event {
+  color: #94a3b8;
+}
+
+#assistant-page .assistant-trace-line .dir {
+  font-weight: 700;
+}
+
+#assistant-page .assistant-trace-line .dir.rx {
+  color: #4ade80;
+}
+
+#assistant-page .assistant-trace-line .dir.tx {
+  color: #fbbf24;
+}
+
+#assistant-page .assistant-trace-line .kind {
+  color: #93c5fd;
+  overflow-wrap: anywhere;
+}
+
+#assistant-page .assistant-trace-line .body {
+  color: #e5e7eb;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 #assistant-page .assistant-send-options {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1238,6 +1299,10 @@ button.active {
 
   #assistant-page .assistant-line {
     grid-template-columns: 82px 26px minmax(0, 1fr);
+  }
+
+  #assistant-page .assistant-trace-line {
+    grid-template-columns: 82px 22px minmax(100px, 140px) minmax(0, 1fr);
   }
 }
 

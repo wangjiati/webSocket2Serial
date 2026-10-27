@@ -181,6 +181,22 @@
         </section>
       </div>
 
+      <details id="assistant-ws-trace" class="card assistant-trace">
+        <summary>WS 报文</summary>
+        <p class="assistant-hint">
+          观察管理 WS 与数据 WS 的报文原文，可对照帮助文档的通信协议与 close code 表。
+          <a href="/help" target="_blank" rel="noopener">帮助文档 ↗</a>
+        </p>
+        <div class="assistant-toolbar">
+          <label class="inline"><input id="assistant-ws-trace-ts" type="checkbox" checked /> 时间戳</label>
+          <button id="assistant-ws-trace-pause" type="button">暂停</button>
+          <button id="assistant-ws-trace-clear" type="button">清空</button>
+          <button id="assistant-ws-trace-export" type="button">导出</button>
+        </div>
+        <div id="assistant-ws-trace-note" class="assistant-buffer-note" hidden></div>
+        <div id="assistant-ws-trace-log" class="assistant-trace-log" aria-label="WebSocket 报文原文"></div>
+      </details>
+
       <section class="card assistant-commands">
         <h2>快捷指令</h2>
         <div class="assistant-command-form">

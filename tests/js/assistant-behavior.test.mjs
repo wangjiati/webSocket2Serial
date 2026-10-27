@@ -172,6 +172,22 @@ async function testSerialTrace() {
   }
 }
 
+async function testTraceBuffer() {
+  const source = await readFile(new URL("format.js", SOURCE_ROOT), "utf8");
+  const url = `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
+  const { pushCapped } = await import(url);
+  const items = Array.from({ length: 2000 }, (_, index) => index + 1);
+  pushCapped(items, 2001, 2000);
+  assert.equal(items.length, 2000);
+  assert.equal(items[0], 2);
+  assert.equal(items.at(-1), 2001);
+
+  const small = [1, 2];
+  pushCapped(small, 3, 2);
+  assert.deepEqual(small, [2, 3]);
+  console.log("panel buffer behavior: ok");
+}
+
 async function testRefreshPorts() {
   const ManagementClient = await loadManagementClient();
   const client = new ManagementClient(8765);
@@ -211,4 +227,7 @@ if (selected === "trace" || selected === "all") {
 }
 if (selected === "refresh" || selected === "all") {
   await testRefreshPorts();
+}
+if (selected === "panel" || selected === "all") {
+  await testTraceBuffer();
 }

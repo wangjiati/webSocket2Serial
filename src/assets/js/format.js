@@ -17,6 +17,11 @@ export const bytesToAscii = (bytes) => Array.from(bytes, (b) => (b >= 32 && b < 
 
 export const bytesEqual = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
 
+export const pushCapped = (items, item, limit) => {
+  items.push(item);
+  while (items.length > limit) items.shift();
+};
+
 export const textEncoder = new TextEncoder();
 
 export const b64encodeBytes = (bytes) => {
