@@ -33,12 +33,24 @@ impl DesktopHandle {
 
         #[cfg(windows)]
         let join = {
-            Some(
-                std::thread::Builder::new()
-                    .name("ws2s-desktop".into())
-                    .spawn(move || windows::run(admin_url, visible, open_admin_tx, command_rx))
-                    .map_err(|err| io::Error::new(err.kind(), err))?,
-            )
+            let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+            let join = std::thread::Builder::new()
+                .name("ws2s-desktop".into())
+                .spawn(move || {
+                    windows::run(admin_url, visible, open_admin_tx, command_rx, ready_tx)
+                })
+                .map_err(|err| io::Error::new(err.kind(), err))?;
+            match ready_rx.recv_timeout(std::time::Duration::from_secs(3)) {
+                Ok(Ok(())) => Some(join),
+                Ok(Err(err)) => {
+                    crate::platform::threads::join_bounded(join, std::time::Duration::from_secs(1));
+                    return Err(io::Error::new(io::ErrorKind::Other, err));
+                }
+                Err(err) => {
+                    crate::platform::threads::join_bounded(join, std::time::Duration::from_secs(1));
+                    return Err(io::Error::new(io::ErrorKind::TimedOut, err));
+                }
+            }
         };
         #[cfg(not(windows))]
         let join = {
@@ -65,7 +77,9 @@ impl DesktopHandle {
     pub fn shutdown(&mut self) {
         let _ = self.command_tx.send(DesktopCommand::Shutdown);
         if let Some(join) = self.join.take() {
-            let _ = join.join();
+            if !crate::platform::threads::join_bounded(join, std::time::Duration::from_secs(2)) {
+                tracing::warn!("桌面 UI 线程未在 2 秒内退出，继续清理核心服务");
+            }
         }
     }
 }

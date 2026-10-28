@@ -1,5 +1,5 @@
 use websocket2serial::desktop::state::{
-    navigation_action, DesktopEvent, DesktopState, NavigationAction,
+    navigation_action, should_navigate, DesktopEvent, DesktopState, NavigationAction,
 };
 
 #[test]
@@ -40,6 +40,14 @@ fn disabling_admin_hides_the_window() {
     state.reduce(DesktopEvent::AdminEnabled(false));
     assert!(!state.is_visible());
     assert!(!state.is_quitting());
+}
+
+#[test]
+fn same_url_show_does_not_reload_but_new_url_does() {
+    let url = "http://127.0.0.1:8766/";
+    assert!(should_navigate(None, url));
+    assert!(!should_navigate(Some(url), url));
+    assert!(should_navigate(Some(url), "http://127.0.0.1:8767/"));
 }
 
 #[test]

@@ -2,22 +2,26 @@
 
 use std::path::Path;
 use std::ptr::null_mut;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use webview2_com::{
     CoTaskMemPWSTR, CreateCoreWebView2ControllerCompletedHandler,
     CreateCoreWebView2EnvironmentCompletedHandler, Microsoft::Web::WebView2::Win32::*,
-    NavigationStartingEventHandler, NewWindowRequestedEventHandler,
+    NavigationCompletedEventHandler, NavigationStartingEventHandler,
+    NewWindowRequestedEventHandler, ProcessFailedEventHandler,
 };
 use windows::core::{PCWSTR, PWSTR};
-use windows::Win32::Foundation::{E_POINTER, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{BOOL, E_POINTER, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::WinRT::EventRegistrationToken;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-use super::state::{navigation_action, DesktopEvent, DesktopState, NavigationAction};
+use super::state::{
+    navigation_action, should_navigate, DesktopEvent, DesktopState, NavigationAction,
+};
 use super::DesktopCommand;
 use crate::paths;
 
@@ -29,6 +33,9 @@ struct WebViewHost {
     webview: ICoreWebView2,
     navigation_token: EventRegistrationToken,
     new_window_token: EventRegistrationToken,
+    completed_token: EventRegistrationToken,
+    process_failed_token: EventRegistrationToken,
+    navigation_failed: Arc<AtomicBool>,
 }
 
 impl Drop for WebViewHost {
@@ -40,6 +47,10 @@ impl Drop for WebViewHost {
             let _ = self
                 .webview
                 .remove_NewWindowRequested(self.new_window_token);
+            let _ = self
+                .webview
+                .remove_NavigationCompleted(self.completed_token);
+            let _ = self.webview.remove_ProcessFailed(self.process_failed_token);
             let _ = self.controller.Close();
         }
     }
@@ -50,6 +61,7 @@ struct DesktopContext {
     open_admin_tx: tokio::sync::mpsc::UnboundedSender<crate::tray::TrayAction>,
     admin_url: Arc<Mutex<String>>,
     webview: Option<WebViewHost>,
+    loaded_url: Option<String>,
     state: DesktopState,
 }
 
@@ -58,9 +70,11 @@ pub(super) fn run(
     visible: bool,
     open_admin_tx: tokio::sync::mpsc::UnboundedSender<crate::tray::TrayAction>,
     command_rx: mpsc::Receiver<DesktopCommand>,
+    ready_tx: mpsc::SyncSender<Result<(), String>>,
 ) {
     unsafe {
         if let Err(err) = CoInitializeEx(None, COINIT_APARTMENTTHREADED) {
+            let _ = ready_tx.send(Err(format!("桌面 UI COM 初始化失败：{err:?}")));
             tracing::error!(error = ?err, "桌面 UI COM 初始化失败");
             return;
         }
@@ -74,7 +88,9 @@ pub(super) fn run(
         ..Default::default()
     };
     if unsafe { RegisterClassW(&class) } == 0 {
-        tracing::warn!(error = ?windows::core::Error::from_win32(), "桌面窗口类注册失败");
+        let err = windows::core::Error::from_win32();
+        let _ = ready_tx.send(Err(format!("桌面窗口类注册失败：{err:?}")));
+        tracing::warn!(error = ?err, "桌面窗口类注册失败");
         unsafe { CoUninitialize() };
         return;
     }
@@ -85,6 +101,7 @@ pub(super) fn run(
         open_admin_tx,
         admin_url,
         webview: None,
+        loaded_url: None,
         state: DesktopState::default(),
     });
     let ctx_ptr = (&mut *ctx) as *mut DesktopContext;
@@ -106,11 +123,14 @@ pub(super) fn run(
         )
     };
     if hwnd.0 == 0 {
-        tracing::warn!(error = ?windows::core::Error::from_win32(), "桌面窗口创建失败");
+        let err = windows::core::Error::from_win32();
+        let _ = ready_tx.send(Err(format!("桌面窗口创建失败：{err:?}")));
+        tracing::warn!(error = ?err, "桌面窗口创建失败");
         unsafe { CoUninitialize() };
         return;
     }
     ctx.hwnd = hwnd;
+    let _ = ready_tx.send(Ok(()));
 
     if visible {
         show_desktop(&mut ctx);
@@ -126,6 +146,7 @@ pub(super) fn run(
                 }
                 DesktopCommand::Hide => unsafe {
                     ctx.state.reduce(DesktopEvent::AdminEnabled(false));
+                    ctx.loaded_url = None;
                     ShowWindow(ctx.hwnd, SW_HIDE);
                 },
                 DesktopCommand::Shutdown => {
@@ -157,6 +178,12 @@ pub(super) fn run(
         std::thread::sleep(Duration::from_millis(25));
     }
 
+    // 所有退出路径（含外部 WM_QUIT）都先断开窗口上下文再释放，避免窗口过程悬空。
+    unsafe {
+        ctx.webview.take();
+        DestroyWindow(ctx.hwnd);
+        SetWindowLongPtrW(ctx.hwnd, GWLP_USERDATA, 0);
+    }
     drop(ctx);
     unsafe { CoUninitialize() };
 }
@@ -175,11 +202,19 @@ fn show_desktop(ctx: &mut DesktopContext) {
 
     let url = ctx.admin_url.lock().unwrap().clone();
     if let Some(host) = &ctx.webview {
-        let url_wide = wide(&url);
-        if let Err(err) = unsafe { host.webview.Navigate(PCWSTR::from_raw(url_wide.as_ptr())) } {
-            tracing::warn!(error = ?err, "管理页导航失败");
-            offer_browser_fallback(ctx);
-            return;
+        if host.navigation_failed.load(Ordering::Relaxed)
+            || should_navigate(ctx.loaded_url.as_deref(), &url)
+        {
+            let url_wide = wide(&url);
+            if let Err(err) = unsafe { host.webview.Navigate(PCWSTR::from_raw(url_wide.as_ptr())) }
+            {
+                tracing::warn!(error = ?err, "管理页导航失败");
+                ctx.loaded_url = None;
+                offer_browser_fallback(ctx);
+                return;
+            }
+            ctx.loaded_url = Some(url);
+            host.navigation_failed.store(false, Ordering::Relaxed);
         }
         resize_webview(ctx.hwnd, &host.controller);
     }
@@ -245,19 +280,38 @@ fn create_webview(hwnd: HWND, admin_url: Arc<Mutex<String>>) -> Result<WebViewHo
         .recv()
         .map_err(|err| format!("等待 WebView2 控制器失败：{err}"))?
         .map_err(|err| format!("创建 WebView2 控制器失败：{err:?}"))?;
-    let webview = unsafe { controller.CoreWebView2() }
-        .map_err(|err| format!("获取 WebView2 失败：{err:?}"))?;
+    let webview = match unsafe { controller.CoreWebView2() } {
+        Ok(webview) => webview,
+        Err(err) => {
+            unsafe {
+                let _ = controller.Close();
+            }
+            return Err(format!("获取 WebView2 失败：{err:?}"));
+        }
+    };
+    let mut host = WebViewHost {
+        controller,
+        webview,
+        navigation_token: EventRegistrationToken::default(),
+        new_window_token: EventRegistrationToken::default(),
+        completed_token: EventRegistrationToken::default(),
+        process_failed_token: EventRegistrationToken::default(),
+        navigation_failed: Arc::new(AtomicBool::new(false)),
+    };
+    // 从这里开始任何错误路径都由 host Drop 关闭 Controller。
     unsafe {
-        controller
+        host.controller
             .SetIsVisible(true)
             .map_err(|err| err.to_string())?;
-        let settings = webview.Settings().map_err(|err| err.to_string())?;
+        let settings = host.webview.Settings().map_err(|err| err.to_string())?;
         settings
             .SetAreDevToolsEnabled(false)
             .map_err(|err| err.to_string())?;
     }
 
+    let suppress_completion_failure = Arc::new(AtomicBool::new(false));
     let navigation_url = Arc::clone(&admin_url);
+    let cancellation_flag = Arc::clone(&suppress_completion_failure);
     let navigation_handler =
         NavigationStartingEventHandler::create(Box::new(move |_sender, args| {
             if let Some(args) = args {
@@ -265,13 +319,18 @@ fn create_webview(hwnd: HWND, admin_url: Arc<Mutex<String>>) -> Result<WebViewHo
                 if unsafe { args.Uri(&mut raw) }.is_ok() {
                     let target = CoTaskMemPWSTR::from(raw).to_string();
                     let base = navigation_url.lock().unwrap().clone();
+                    cancellation_flag.store(false, Ordering::Relaxed);
                     match navigation_action(&base, &target) {
                         NavigationAction::Allow => {}
                         NavigationAction::OpenExternal => {
+                            cancellation_flag.store(true, Ordering::Relaxed);
                             unsafe { args.SetCancel(true) }?;
                             open_external(&target);
                         }
-                        NavigationAction::Block => unsafe { args.SetCancel(true) }?,
+                        NavigationAction::Block => {
+                            cancellation_flag.store(true, Ordering::Relaxed);
+                            unsafe { args.SetCancel(true) }?;
+                        }
                     }
                 }
             }
@@ -293,23 +352,63 @@ fn create_webview(hwnd: HWND, admin_url: Arc<Mutex<String>>) -> Result<WebViewHo
             Ok(())
         },
     ));
-    let mut navigation_token = EventRegistrationToken::default();
-    let mut new_window_token = EventRegistrationToken::default();
+    let failed_url = Arc::clone(&admin_url);
+    let completed_cancellation = Arc::clone(&suppress_completion_failure);
+    let completed_failure_flag = Arc::clone(&host.navigation_failed);
+    let completed_handler =
+        NavigationCompletedEventHandler::create(Box::new(move |_sender, args| {
+            if completed_cancellation.swap(false, Ordering::Relaxed) {
+                return Ok(());
+            }
+            let success = args
+                .map(|args| {
+                    let mut value = BOOL(0);
+                    unsafe { args.IsSuccess(&mut value) }
+                        .map(|_| value.as_bool())
+                        .unwrap_or(false)
+                })
+                .unwrap_or(false);
+            completed_failure_flag.store(!success, Ordering::Relaxed);
+            if !success {
+                let url = failed_url.lock().unwrap().clone();
+                tracing::warn!(url, "管理页导航未完成，改用系统浏览器");
+                open_external(&url);
+            }
+            Ok(())
+        }));
+    let failed_process_url = Arc::clone(&admin_url);
+    let process_failed_flag = Arc::clone(&host.navigation_failed);
+    let process_failed_handler =
+        ProcessFailedEventHandler::create(Box::new(move |_sender, args| {
+            let kind = args
+                .map(|args| {
+                    let mut value = COREWEBVIEW2_PROCESS_FAILED_KIND(0);
+                    unsafe { args.ProcessFailedKind(&mut value) }
+                        .map(|_| value.0)
+                        .unwrap_or(-1)
+                })
+                .unwrap_or(-1);
+            tracing::warn!(kind, "WebView2 进程失败，改用系统浏览器");
+            process_failed_flag.store(true, Ordering::Relaxed);
+            let url = failed_process_url.lock().unwrap().clone();
+            open_external(&url);
+            Ok(())
+        }));
     unsafe {
-        webview
-            .add_NavigationStarting(&navigation_handler, &mut navigation_token)
+        host.webview
+            .add_NavigationStarting(&navigation_handler, &mut host.navigation_token)
             .map_err(|err| err.to_string())?;
-        webview
-            .add_NewWindowRequested(&new_window_handler, &mut new_window_token)
+        host.webview
+            .add_NewWindowRequested(&new_window_handler, &mut host.new_window_token)
+            .map_err(|err| err.to_string())?;
+        host.webview
+            .add_NavigationCompleted(&completed_handler, &mut host.completed_token)
+            .map_err(|err| err.to_string())?;
+        host.webview
+            .add_ProcessFailed(&process_failed_handler, &mut host.process_failed_token)
             .map_err(|err| err.to_string())?;
     }
 
-    let host = WebViewHost {
-        controller,
-        webview,
-        navigation_token,
-        new_window_token,
-    };
     resize_webview(hwnd, &host.controller);
     Ok(host)
 }

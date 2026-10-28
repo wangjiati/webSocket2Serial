@@ -109,7 +109,7 @@ if ($WebView2RuntimeCab) {
 
 if ($RuntimeSource) {
     $ActualVersion = $RuntimeExe.VersionInfo.ProductVersion.Trim()
-    if (-not $ActualVersion.StartsWith($WebView2RuntimeVersion)) {
+    if ($ActualVersion -ne $WebView2RuntimeVersion) {
         throw "WebView2 Runtime version mismatch: expected $WebView2RuntimeVersion, got $ActualVersion"
     }
     $RuntimeDest = Join-Path $StageDir "runtime\webview2"

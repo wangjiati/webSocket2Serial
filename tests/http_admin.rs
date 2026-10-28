@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use websocket2serial::app::AdminController;
+use websocket2serial::app::{ensure_admin_url, AdminController};
 use websocket2serial::http::AdminService;
 
 /// 本机 HTTP 客户端。固定 `no_proxy()`，避免开发机系统代理（如 `127.0.0.1:10808`）
@@ -77,6 +77,18 @@ async fn admin_controller_trait_drives_http_service() {
     assert!(reenabled.enabled);
     wait_reachable(&reenabled.url).await;
 
+    controller.set_enabled(false).await;
+}
+
+#[tokio::test]
+async fn ensure_admin_url_reopens_a_disabled_service() {
+    let svc = AdminService::new(0, 8765);
+    assert!(!svc.status().enabled);
+    let controller: Arc<dyn AdminController> = Arc::new(svc);
+    let url = ensure_admin_url(controller.as_ref())
+        .await
+        .expect("应从真实状态重新启用管理页");
+    wait_reachable(&url).await;
     controller.set_enabled(false).await;
 }
 

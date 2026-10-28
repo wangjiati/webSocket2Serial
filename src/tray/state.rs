@@ -2,6 +2,31 @@
 
 use crate::protocol::SessionState;
 
+/// `Shell_NotifyIcon` v4 回调中的用户动作。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrayMouseAction {
+    OpenAdmin,
+    OpenMenu,
+    None,
+}
+
+/// 解析 `NOTIFYICON_VERSION_4` 的 `lParam`：LOWORD 为事件，HIWORD 为图标 ID。
+///
+/// v4 同时使用 `NIN_SELECT`/`NIN_KEYSELECT` 表示激活，不能只比较旧版 WM_* 值。
+pub fn tray_mouse_action(lparam: isize) -> TrayMouseAction {
+    const WM_LBUTTONDBLCLK: u32 = 0x0203;
+    const WM_RBUTTONUP: u32 = 0x0205;
+    const WM_CONTEXTMENU: u32 = 0x007B;
+    const NIN_SELECT: u32 = 0x0400;
+    const NIN_KEYSELECT: u32 = 0x0401;
+
+    match (lparam as u32) & 0xFFFF {
+        WM_LBUTTONDBLCLK | NIN_SELECT | NIN_KEYSELECT => TrayMouseAction::OpenAdmin,
+        WM_RBUTTONUP | WM_CONTEXTMENU => TrayMouseAction::OpenMenu,
+        _ => TrayMouseAction::None,
+    }
+}
+
 /// 托盘图标状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayStatus {

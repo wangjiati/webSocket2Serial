@@ -9,7 +9,7 @@ use clap::Parser;
 use tokio::sync::broadcast;
 use tracing::{error, info, warn};
 
-use websocket2serial::app::build_app;
+use websocket2serial::app::{build_app, ensure_admin_url};
 use websocket2serial::cli::Cli;
 use websocket2serial::config::{Config, OriginAllowlist};
 use websocket2serial::desktop::{self, DesktopHandle};
@@ -40,6 +40,10 @@ async fn main() {
         Ok(guard) => guard,
         Err(err) => {
             eprintln!("日志初始化失败：{err}");
+            fatal_error(
+                "WebSocket2Serial 启动失败",
+                &format!("日志初始化失败：{err}"),
+            );
             std::process::exit(1);
         }
     };
@@ -199,13 +203,15 @@ async fn main() {
             action = action_rx.recv() => {
                 match action {
                     Some(TrayAction::OpenAdmin) => {
-                        if !admin_enabled {
-                            let state = app.state.admin.set_enabled(true).await;
-                            admin_enabled = state.enabled;
-                        }
-                        let url = app.state.admin.status().url;
-                        if !url.is_empty() {
-                            show_admin(&desktop, &url, &tray_handle);
+                        match ensure_admin_url(app.state.admin.as_ref()).await {
+                            Ok(url) => {
+                                admin_enabled = true;
+                                show_admin(&desktop, &url, &tray_handle);
+                            }
+                            Err(err) => {
+                                warn!(error = %err, "重新打开管理页失败");
+                                tray_handle.bubble(err);
+                            }
                         }
                         tray_handle.send_state(current_tray_state(
                             app.management_port,
@@ -216,13 +222,15 @@ async fn main() {
                         ));
                     }
                     Some(TrayAction::OpenBrowser) => {
-                        if !admin_enabled {
-                            let state = app.state.admin.set_enabled(true).await;
-                            admin_enabled = state.enabled;
-                        }
-                        let url = app.state.admin.status().url;
-                        if !url.is_empty() {
-                            open_browser(&url, &tray_handle);
+                        match ensure_admin_url(app.state.admin.as_ref()).await {
+                            Ok(url) => {
+                                admin_enabled = true;
+                                open_browser(&url, &tray_handle);
+                            }
+                            Err(err) => {
+                                warn!(error = %err, "重新打开管理页失败");
+                                tray_handle.bubble(err);
+                            }
                         }
                         tray_handle.send_state(current_tray_state(
                             app.management_port,
@@ -235,6 +243,11 @@ async fn main() {
                     Some(TrayAction::SetAdmin(enabled)) => {
                         let state = app.state.admin.set_enabled(enabled).await;
                         admin_enabled = state.enabled;
+                        if !admin_enabled {
+                            if let Some(desktop) = &desktop {
+                                desktop.hide();
+                            }
+                        }
                         let _ = app.state.events.send(Event::AdminState(state));
                         tray_handle.send_state(current_tray_state(
                             app.management_port,
@@ -314,7 +327,23 @@ async fn main() {
                         ));
                     }
                     Ok(_) => {}
-                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                        warn!(skipped, "事件接收滞后，按管理服务真实状态重新同步");
+                        let state = app.state.admin.status();
+                        admin_enabled = state.enabled;
+                        if !admin_enabled {
+                            if let Some(desktop) = &desktop {
+                                desktop.hide();
+                            }
+                        }
+                        tray_handle.send_state(current_tray_state(
+                            app.management_port,
+                            &sessions,
+                            &last_error,
+                            admin_enabled,
+                            autostart_enabled,
+                        ));
+                    }
                     Err(broadcast::error::RecvError::Closed) => {}
                 }
             }

@@ -107,6 +107,24 @@ pub fn build_app(
     })
 }
 
+/// 以运行时真实状态确保管理页启用，返回可访问 URL。
+///
+/// broadcast 事件可能滞后或丢失，因此打开/恢复窗口前必须查询 `status()`，
+/// 不能依赖主循环缓存。
+pub async fn ensure_admin_url(admin: &dyn AdminController) -> Result<String, String> {
+    let status = admin.status();
+    let status = if !status.enabled || status.url.is_empty() {
+        admin.set_enabled(true).await
+    } else {
+        status
+    };
+    if status.enabled && !status.url.is_empty() {
+        Ok(status.url)
+    } else {
+        Err("管理页启动失败，请检查端口占用与日志".into())
+    }
+}
+
 /// 当前 Unix 时间戳（毫秒）。
 fn now_ms() -> u64 {
     std::time::SystemTime::now()

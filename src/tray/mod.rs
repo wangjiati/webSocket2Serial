@@ -104,11 +104,13 @@ impl TrayHandle {
         let _ = self.update_tx.send(TrayUpdate::Bubble(message.into()));
     }
 
-    /// 关闭托盘并等待线程退出（幂等）。
+    /// 关闭托盘并等待线程退出（幂等，最多等待 2 秒）。
     pub fn shutdown(&mut self) {
         let _ = self.update_tx.send(TrayUpdate::Shutdown);
         if let Some(join) = self.join.take() {
-            let _ = join.join();
+            if !crate::platform::threads::join_bounded(join, std::time::Duration::from_secs(2)) {
+                tracing::warn!("托盘线程未在 2 秒内退出，继续清理核心服务");
+            }
         }
     }
 }

@@ -47,6 +47,11 @@ impl DesktopState {
     }
 }
 
+/// URL 未加载或变更时才导航；仅恢复窗口不应重载页面。
+pub fn should_navigate(loaded_url: Option<&str>, target: &str) -> bool {
+    loaded_url != Some(target)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NavigationAction {
     Allow,
