@@ -19,6 +19,8 @@ mod windows;
 pub enum TrayAction {
     /// 打开管理页（若已禁用则先启用）。
     OpenAdmin,
+    /// 在系统浏览器中打开管理页（若已禁用则先启用）。
+    OpenBrowser,
     /// 管理服务开关。
     SetAdmin(bool),
     /// 开机自启开关。
@@ -85,6 +87,11 @@ impl TrayHandle {
             },
             action_rx,
         )
+    }
+
+    /// 供原生窗口把第二实例唤醒统一转交主事件循环。
+    pub fn action_sender(&self) -> tokio::sync::mpsc::UnboundedSender<TrayAction> {
+        self._action_tx.clone()
     }
 
     /// 发送状态快照；托盘线程已退出时静默忽略。

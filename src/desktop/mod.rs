@@ -24,22 +24,25 @@ pub struct DesktopHandle {
 
 impl DesktopHandle {
     /// 启动 UI 线程。窗口创建与 WebView2 初始化失败只影响内嵌 UI。
-    pub fn start(admin_url: String, visible: bool) -> io::Result<DesktopHandle> {
+    pub fn start(
+        admin_url: String,
+        visible: bool,
+        open_admin_tx: tokio::sync::mpsc::UnboundedSender<crate::tray::TrayAction>,
+    ) -> io::Result<DesktopHandle> {
         let (command_tx, command_rx) = std::sync::mpsc::channel();
 
         #[cfg(windows)]
         let join = {
-            let ui_command_tx = command_tx.clone();
             Some(
                 std::thread::Builder::new()
                     .name("ws2s-desktop".into())
-                    .spawn(move || windows::run(admin_url, visible, ui_command_tx, command_rx))
+                    .spawn(move || windows::run(admin_url, visible, open_admin_tx, command_rx))
                     .map_err(|err| io::Error::new(err.kind(), err))?,
             )
         };
         #[cfg(not(windows))]
         let join = {
-            let _ = (admin_url, visible);
+            let _ = (admin_url, visible, open_admin_tx);
             None
         };
 

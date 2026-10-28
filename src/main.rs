@@ -1,3 +1,5 @@
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -10,6 +12,7 @@ use tracing::{error, info, warn};
 use websocket2serial::app::build_app;
 use websocket2serial::cli::Cli;
 use websocket2serial::config::{Config, OriginAllowlist};
+use websocket2serial::desktop::{self, DesktopHandle};
 use websocket2serial::http::AdminService;
 use websocket2serial::platform::autostart;
 use websocket2serial::platform::single_instance::SingleInstance;
@@ -22,6 +25,7 @@ use websocket2serial::{logging, paths};
 
 #[tokio::main]
 async fn main() {
+    attach_parent_console_for_cli();
     let cli = Cli::parse();
 
     let config_path: PathBuf = cli
@@ -58,8 +62,12 @@ async fn main() {
     let _single: Option<SingleInstance> = match SingleInstance::acquire() {
         Ok(Some(handle)) => Some(handle),
         Ok(None) => {
-            info!("已有实例在运行，尝试打开其管理页后退出");
-            open_existing_admin(config.admin.port).await;
+            if desktop::wake_existing() {
+                info!("已有实例在运行，已请求恢复其管理窗口");
+            } else {
+                info!("已有实例在运行，尝试打开其管理页后退出");
+                open_existing_admin(config.admin.port).await;
+            }
             return;
         }
         Err(err) => {
@@ -133,7 +141,7 @@ async fn main() {
     // 运行时管理页开关状态：托盘菜单展示用，随托盘动作与 AdminState 事件同步。
     let mut admin_enabled = admin.status().enabled;
 
-    // 托盘。
+    // 托盘动作通道同时承载原生窗口的第二实例唤醒。
     let initial = current_tray_state(
         app.management_port,
         &HashMap::new(),
@@ -143,6 +151,20 @@ async fn main() {
     );
     let (mut tray_handle, mut action_rx) =
         TrayHandle::start(env!("CARGO_PKG_VERSION").to_string(), initial);
+
+    // Windows 原生管理窗口；管理服务配置为关闭时仅驻留托盘。
+    let admin_url = admin.status().url;
+    let mut desktop = match DesktopHandle::start(
+        admin_url,
+        admin_enabled && !cli.minimized,
+        tray_handle.action_sender(),
+    ) {
+        Ok(desktop) => Some(desktop),
+        Err(err) => {
+            warn!(error = %err, "原生窗口线程启动失败，以无窗口模式运行");
+            None
+        }
+    };
 
     // 退出信号：ctrl-c（全平台）+ SIGTERM（Unix）。
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
@@ -183,10 +205,24 @@ async fn main() {
                         }
                         let url = app.state.admin.status().url;
                         if !url.is_empty() {
-                            if let Err(err) = open::that(&url) {
-                                warn!(error = %err, "打开管理页失败");
-                                tray_handle.bubble(format!("打开管理页失败：{err}"));
-                            }
+                            show_admin(&desktop, &url, &tray_handle);
+                        }
+                        tray_handle.send_state(current_tray_state(
+                            app.management_port,
+                            &sessions,
+                            &last_error,
+                            admin_enabled,
+                            autostart_enabled,
+                        ));
+                    }
+                    Some(TrayAction::OpenBrowser) => {
+                        if !admin_enabled {
+                            let state = app.state.admin.set_enabled(true).await;
+                            admin_enabled = state.enabled;
+                        }
+                        let url = app.state.admin.status().url;
+                        if !url.is_empty() {
+                            open_browser(&url, &tray_handle);
                         }
                         tray_handle.send_state(current_tray_state(
                             app.management_port,
@@ -264,6 +300,11 @@ async fn main() {
                     Ok(Event::AdminState(state)) => {
                         // 管理页开关（含网页 admin.set）同步到托盘菜单。
                         admin_enabled = state.enabled;
+                        if !admin_enabled {
+                            if let Some(desktop) = &desktop {
+                                desktop.hide();
+                            }
+                        }
                         tray_handle.send_state(current_tray_state(
                             app.management_port,
                             &sessions,
@@ -285,7 +326,10 @@ async fn main() {
     }
 
     // 退出清理：停托盘 → 停管理 WS → 关会话（1001）→ 停管理页。
-    info!("正在退出：关闭托盘、停止服务、关闭会话");
+    info!("正在退出：关闭原生窗口、托盘、服务与会话");
+    if let Some(desktop) = &mut desktop {
+        desktop.shutdown();
+    }
     tray_handle.shutdown();
 
     let management_port = app.management_port;
@@ -302,6 +346,70 @@ async fn main() {
     admin.shutdown().await;
     info!("websocket2serial 已退出（管理 WS {}）", management_port);
     // _guard drop 时刷新日志。
+}
+
+/// 发布版为 GUI 子系统；带参数从终端运行时附加父控制台以保留 CLI 输出。
+#[cfg(all(windows, not(debug_assertions)))]
+fn attach_parent_console_for_cli() {
+    if std::env::args_os().len() <= 1 {
+        return;
+    }
+    use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
+    use windows_sys::Win32::System::Console::{
+        AttachConsole, GetStdHandle, SetStdHandle, ATTACH_PARENT_PROCESS, STD_ERROR_HANDLE,
+        STD_OUTPUT_HANDLE,
+    };
+
+    let name: Vec<u16> = "CONOUT$".encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        AttachConsole(ATTACH_PARENT_PROCESS);
+        let conout = CreateFileW(
+            name.as_ptr(),
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            0,
+        );
+        if conout == INVALID_HANDLE_VALUE || conout == 0 {
+            return;
+        }
+        // 保留 shell 重定向/管道句柄；仅在句柄为空时接入父控制台。
+        let stdout = GetStdHandle(STD_OUTPUT_HANDLE);
+        if stdout == 0 || stdout == INVALID_HANDLE_VALUE {
+            SetStdHandle(STD_OUTPUT_HANDLE, conout);
+        }
+        let stderr = GetStdHandle(STD_ERROR_HANDLE);
+        if stderr == 0 || stderr == INVALID_HANDLE_VALUE {
+            SetStdHandle(STD_ERROR_HANDLE, conout);
+        }
+    }
+}
+
+#[cfg(any(not(windows), debug_assertions))]
+fn attach_parent_console_for_cli() {}
+
+/// Windows 优先恢复原生窗口；无窗口平台或 UI 启动失败时使用浏览器。
+fn show_admin(desktop: &Option<DesktopHandle>, url: &str, tray: &TrayHandle) {
+    #[cfg(windows)]
+    if let Some(desktop) = desktop {
+        desktop.show(url);
+        return;
+    }
+    #[cfg(not(windows))]
+    let _ = desktop;
+    open_browser(url, tray);
+}
+
+fn open_browser(url: &str, tray: &TrayHandle) {
+    if let Err(err) = open::that(url) {
+        warn!(error = %err, "打开管理页失败");
+        tray.bubble(format!("打开管理页失败：{err}"));
+    }
 }
 
 /// 已有实例时尝试打开其管理页（探测端口，避免管理页被禁用时浏览器报错）。

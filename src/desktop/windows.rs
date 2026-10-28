@@ -17,7 +17,7 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::WinRT::EventRegistrationToken;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-use super::state::{navigation_action, NavigationAction};
+use super::state::{navigation_action, DesktopEvent, DesktopState, NavigationAction};
 use super::DesktopCommand;
 use crate::paths;
 
@@ -47,15 +47,16 @@ impl Drop for WebViewHost {
 
 struct DesktopContext {
     hwnd: HWND,
-    command_tx: mpsc::Sender<DesktopCommand>,
+    open_admin_tx: tokio::sync::mpsc::UnboundedSender<crate::tray::TrayAction>,
     admin_url: Arc<Mutex<String>>,
     webview: Option<WebViewHost>,
+    state: DesktopState,
 }
 
 pub(super) fn run(
     admin_url: String,
     visible: bool,
-    command_tx: mpsc::Sender<DesktopCommand>,
+    open_admin_tx: tokio::sync::mpsc::UnboundedSender<crate::tray::TrayAction>,
     command_rx: mpsc::Receiver<DesktopCommand>,
 ) {
     unsafe {
@@ -81,9 +82,10 @@ pub(super) fn run(
     let admin_url = Arc::new(Mutex::new(admin_url));
     let mut ctx = Box::new(DesktopContext {
         hwnd: HWND::default(),
-        command_tx,
+        open_admin_tx,
         admin_url,
         webview: None,
+        state: DesktopState::default(),
     });
     let ctx_ptr = (&mut *ctx) as *mut DesktopContext;
     let title = wide("WebSocket2Serial");
@@ -123,9 +125,11 @@ pub(super) fn run(
                     show_desktop(&mut ctx);
                 }
                 DesktopCommand::Hide => unsafe {
+                    ctx.state.reduce(DesktopEvent::AdminEnabled(false));
                     ShowWindow(ctx.hwnd, SW_HIDE);
                 },
                 DesktopCommand::Shutdown => {
+                    ctx.state.reduce(DesktopEvent::Quit);
                     running = false;
                     unsafe {
                         ctx.webview.take();
@@ -183,6 +187,7 @@ fn show_desktop(ctx: &mut DesktopContext) {
         ShowWindow(ctx.hwnd, SW_RESTORE);
         ShowWindow(ctx.hwnd, SW_SHOW);
         SetForegroundWindow(ctx.hwnd);
+        ctx.state.reduce(DesktopEvent::Show);
     }
 }
 
@@ -385,10 +390,12 @@ unsafe extern "system" fn wnd_proc(
     let ctx = &mut *ctx;
     match msg {
         WM_CLOSE => {
+            ctx.state.reduce(DesktopEvent::Close);
             ShowWindow(hwnd, SW_HIDE);
             LRESULT(0)
         }
         WM_SIZE if wparam.0 as u32 == SIZE_MINIMIZED => {
+            ctx.state.reduce(DesktopEvent::Minimize);
             ShowWindow(hwnd, SW_HIDE);
             LRESULT(0)
         }
@@ -399,8 +406,7 @@ unsafe extern "system" fn wnd_proc(
             LRESULT(0)
         }
         WM_SHOW_DESKTOP => {
-            let url = ctx.admin_url.lock().unwrap().clone();
-            let _ = ctx.command_tx.send(DesktopCommand::Show(url));
+            let _ = ctx.open_admin_tx.send(crate::tray::TrayAction::OpenAdmin);
             LRESULT(0)
         }
         WM_DESTROY => {

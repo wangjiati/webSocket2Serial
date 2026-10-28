@@ -47,6 +47,7 @@ const ID_ADMIN: usize = 3;
 const ID_AUTOSTART: usize = 4;
 const ID_ABOUT: usize = 5;
 const ID_QUIT: usize = 6;
+const ID_BROWSER: usize = 7;
 
 /// 托盘线程上下文；通过窗口 GWLP_USERDATA 保存裸指针。
 struct TrayContext {
@@ -114,6 +115,7 @@ impl TrayContext {
 
         let status = wide(&format!("状态：{}", self.state.status.label()));
         let open = wide("打开管理页");
+        let browser = wide("在浏览器中打开");
         let admin = wide(if self.state.admin_enabled {
             "管理服务：关闭"
         } else {
@@ -131,6 +133,7 @@ impl TrayContext {
             AppendMenuW(menu, MF_STRING | MF_GRAYED, ID_STATUS, status.as_ptr());
             AppendMenuW(menu, MF_SEPARATOR, 0, null());
             AppendMenuW(menu, MF_STRING, ID_OPEN, open.as_ptr());
+            AppendMenuW(menu, MF_STRING, ID_BROWSER, browser.as_ptr());
             AppendMenuW(menu, MF_STRING, ID_ADMIN, admin.as_ptr());
             AppendMenuW(menu, MF_STRING, ID_AUTOSTART, autostart.as_ptr());
             AppendMenuW(menu, MF_SEPARATOR, 0, null());
@@ -164,6 +167,9 @@ impl TrayContext {
         match id {
             ID_OPEN => {
                 let _ = self.action_tx.send(TrayAction::OpenAdmin);
+            }
+            ID_BROWSER => {
+                let _ = self.action_tx.send(TrayAction::OpenBrowser);
             }
             ID_ADMIN => {
                 let enabled = !self.state.admin_enabled;
