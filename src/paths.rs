@@ -44,6 +44,28 @@ pub fn log_dir() -> PathBuf {
     }
 }
 
+/// WebView2 用户数据目录（不能写入可能只读的程序安装目录）。
+pub fn webview_data_dir() -> PathBuf {
+    if cfg!(windows) {
+        dirs::data_local_dir()
+            .map(|d| d.join("WebSocket2Serial").join("webview2"))
+            .unwrap_or_else(fallback)
+    } else {
+        log_dir()
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join("webview2")
+    }
+}
+
+/// 可选的随包 WebView2 固定运行时目录。
+pub fn bundled_webview2_dir() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("runtime").join("webview2")))
+        .unwrap_or_else(|| PathBuf::from("runtime/webview2"))
+}
+
 /// 单实例锁文件路径。
 ///
 /// - Linux：`$XDG_RUNTIME_DIR/websocket2serial.lock`（缺省退回配置目录）。
