@@ -111,6 +111,10 @@ fn package_scripts_reference_toolchain_and_artifacts() {
     assert!(ps1.contains("x86_64-pc-windows-msvc"));
     assert!(ps1.contains("crt-static"));
     assert!(ps1.to_ascii_lowercase().contains(".zip"));
+    assert!(ps1.contains("WebView2RuntimeCab"));
+    assert!(ps1.contains("Get-FileHash"));
+    assert!(ps1.contains("msedgewebview2.exe"));
+    assert!(ps1.contains("runtime\\webview2"));
 
     let sh = include_str!("../scripts/package-linux.sh");
     assert!(sh.contains("ubuntu:18.04"));

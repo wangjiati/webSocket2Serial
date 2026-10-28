@@ -22,6 +22,9 @@ Windows 静态 CRT 与 Ubuntu 18.04 构建细节见
 
 - Windows：`powershell -ExecutionPolicy Bypass -File scripts/package-windows.ps1`
   （Rust 1.77.2 + 静态 CRT，产出 `dist/websocket2serial-windows-x86_64.zip`）。
+- Win7 离线交付需额外传入 WebView2 Fixed Version 109 的 CAB 与 SHA-256：
+  `-WebView2RuntimeCab <cab> -WebView2RuntimeSha256 <sha256>`。未提供时使用系统
+  Evergreen WebView2；固定运行时不提交仓库。
 - Linux：`bash scripts/package-linux.sh`
   （在 `ubuntu:18.04` 容器内构建，产出 `dist/websocket2serial-linux-x86_64.tar.gz`；
   无 Docker/Podman 时打印手动构建步骤）。
@@ -31,8 +34,11 @@ Windows 静态 CRT 与 Ubuntu 18.04 构建细节见
 ### Windows（免安装）
 
 1. 解压 zip 到固定目录（如 `C:\Program Files\WebSocket2Serial\`）。
-2. 双击 `websocket2serial.exe`，托盘图标出现。
+2. 双击 `websocket2serial.exe`：显示内嵌管理页的原生窗口，同时出现托盘图标。
 3. 管理页默认 `http://127.0.0.1:8766/`；串口助手 `/assistant`；功能测试 `/test`；帮助文档 `/help`；管理 WS `ws://127.0.0.1:8765/ws`。
+4. 最小化和关闭按钮只隐藏到托盘，串口会话继续运行；双击托盘恢复。仅托盘「退出」结束程序。
+5. 托盘「在浏览器中打开」保留系统浏览器入口。Win7 需 WebView2 Runtime 109；缺少时
+   内嵌窗口提示并使用浏览器降级，后台透传服务不受影响。
 
 ### Linux
 
@@ -49,8 +55,9 @@ cd websocket2serial
 - **串口助手** `http://127.0.0.1:8766/assistant`：自己选择并打开/关闭串口、手动刷新串口，文本/HEX 收发、时间戳、UTF-8/GBK 接收、快捷指令、发送历史、定时/循环发送、校验和、日志导出；WS 报文原文观察按时间平铺并标注操作类型，支持暂停/清空/导出，便于对照帮助文档；适合日常人工调试。同一串口同时只允许一个数据客户端。
 - **功能测试** `http://127.0.0.1:8766/test`：原有 7 个子 tab 的协议演示、边界自检与一键完整演示。
 - **帮助文档** `http://127.0.0.1:8766/help`：页面说明、串口参数、占用/宽限、完整通信协议、错误码与数据 close code。
-- 管理服务运行时可开可关（托盘菜单 / 网页开关）；关闭后托盘可重开，或重启加 `--admin` 强制开启。
-- 命令行：`websocket2serial [--config PATH] [--admin] [--version]`。
+- 管理服务运行时可开可关（托盘菜单 / 网页开关）；关闭后窗口自动隐藏，托盘可重开或再次启动 exe 恢复。
+- 命令行：`websocket2serial [--config PATH] [--admin] [--minimized] [--version]`。
+- `--minimized` 只驻留托盘，开机自启默认使用该参数。
 
 ## 开机自启
 
@@ -61,7 +68,7 @@ cd websocket2serial
 
 ## 卸载
 
-- Windows：退出进程，删除解压目录与 Run 键
+- Windows：从托盘退出进程，删除解压目录与 Run 键
   `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\WebSocket2Serial`。
 - Linux：删除 `~/.local/bin/websocket2serial` 与
   `~/.config/autostart/websocket2serial.desktop`。

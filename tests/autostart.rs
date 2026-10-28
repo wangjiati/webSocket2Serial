@@ -29,10 +29,10 @@ fn windows_run_value_quotes_paths_with_spaces() {
     ));
     assert_eq!(
         v,
-        r#""C:\Program Files\WebSocket2Serial\websocket2serial.exe""#
+        r#""C:\Program Files\WebSocket2Serial\websocket2serial.exe" --minimized"#
     );
 
     // 不含空格的路径保持原样（无需引号）。
     let plain = windows_run_value(Path::new(r"C:\bin\websocket2serial.exe"));
-    assert_eq!(plain, r"C:\bin\websocket2serial.exe");
+    assert_eq!(plain, r"C:\bin\websocket2serial.exe --minimized");
 }

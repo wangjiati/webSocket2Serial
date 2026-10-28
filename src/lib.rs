@@ -5,6 +5,7 @@
 pub mod app;
 pub mod cli;
 pub mod config;
+pub mod desktop;
 pub mod hotplug;
 pub mod http;
 pub mod logging;

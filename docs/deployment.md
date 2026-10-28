@@ -14,6 +14,7 @@ Windows 7 SP1 / Ubuntu 18.04 的平台依赖。
 | Ubuntu 18.04 x86_64 | `websocket2serial-linux-x86_64.tar.gz` | 解压后运行 `install.sh` |
 
 两个包均含：二进制、`README.md`、`config.toml.example`（Linux 包另含 `install.sh`）。
+提供固定运行时时，Windows 包另含 `runtime/webview2/`（约 250 MB 以上）。
 
 ---
 
@@ -22,11 +23,12 @@ Windows 7 SP1 / Ubuntu 18.04 的平台依赖。
 ### 2.1 Windows（免安装）
 
 1. 解压 zip 到固定目录，例如 `C:\Program Files\WebSocket2Serial\`。
-2. 双击 `websocket2serial.exe`（首次监听回环端口时系统可能弹防火墙提示，见 §6）。
+2. 双击 `websocket2serial.exe`：显示内嵌管理页的原生窗口（首次监听回环端口时系统可能弹防火墙提示，见 §6）。
 3. 管理页默认 `http://127.0.0.1:8766/`；管理 WS `ws://127.0.0.1:8765/ws`。
-4. 在托盘菜单开启「开机自启」（写入当前用户 Run 键）。
+4. 托盘双击恢复窗口；窗口最小化/关闭只隐藏，串口会话保持。仅托盘「退出」结束进程。
+5. 在托盘菜单开启「开机自启」（写入当前用户 Run 键，并携带 `--minimized`）。
 
-卸载：退出托盘进程，删除解压目录与注册表 Run 键
+卸载：从托盘退出进程，删除解压目录与注册表 Run 键
 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\WebSocket2Serial`。
 
 ### 2.2 Linux
@@ -47,7 +49,20 @@ Entry 规范转义）。应用每次启动若检测到自启已启用，会用�
 卸载：删除 `~/.local/bin/websocket2serial` 与
 `~/.config/autostart/websocket2serial.desktop`。
 
-### 2.3 管理工具页面
+### 2.3 WebView2 与 Windows 7
+
+- Windows 原生窗口内嵌现有管理页，不重做一套管理 UI；用户数据位于
+  `%LOCALAPPDATA%\WebSocket2Serial\webview2`。
+- Windows 10/11 优先使用系统 Evergreen WebView2。Win7 最后可用版本是 Runtime 109；
+  更高版本无法在 Win7 启动。
+- 离线 Win7 包应在打包时传入 Fixed Version 109 CAB 与 SHA-256，脚本会校验版本并放入
+  `runtime/webview2`。运行时文件不进入 Git。
+- Runtime 缺失或初始化失败时，后台管理 WS、串口会话和托盘继续工作；窗口提示后可改用
+  系统浏览器。
+- 内嵌窗口只允许导航到当前本机管理页；其他 HTTP(S) 链接和 `target="_blank"` 均交给
+  系统浏览器，非 Web 协议被阻止。
+
+### 2.4 管理工具页面
 
 - 管理页：`http://127.0.0.1:8766/`（状态监控、串口/会话、帮助文档）。
 - 串口助手：`http://127.0.0.1:8766/assistant`（自己打开/关闭串口，日常人工收发调试）。
@@ -127,9 +142,11 @@ Entry 规范转义）。应用每次启动若检测到自启已启用，会用�
 
 - 管理页运行时可开可关（托盘菜单 / 网页「管理服务」开关 / 协议 `admin.set`）；
   **运行时开关不回写配置**。
-- 管理 WS（8765）常开，是恢复入口；管理页关闭后，托盘可重新打开，或重启时加
-  `--admin` 强制本次启动开启。
-- 命令行：`websocket2serial [--config PATH] [--admin] [--version]`。
+- 管理 WS（8765）常开，是恢复入口；管理页关闭后原生窗口自动隐藏，托盘或再次启动 exe
+  会先重开管理服务并恢复窗口，也可加 `--admin` 在启动时强制开启。
+- 命令行：`websocket2serial [--config PATH] [--admin] [--minimized] [--version]`。
+- `--minimized` 启动时不显示窗口；开机自启项使用该参数。发布版为 Windows GUI 子系统，
+  双击无控制台；从终端带参数运行仍保留 CLI 输出。
 
 ---
 
@@ -176,7 +193,8 @@ Entry 规范转义）。应用每次启动若检测到自启已启用，会用�
   `x86_64-pc-windows-msvc`，`-C target-feature=+crt-static`：**无需额外安装 VC
   运行库**（无 vcruntime140 / api-ms-win-crt 依赖）。
 - v1 仅 x64；32 位 Win7 需现场盘点后另行评估 i686 构建。
-- 交付前需在 Win7 SP1 x64 虚拟机实测启动/串口/管理页/托盘/写超时。
+- WebView2 使用 SDK `1.0.1518.46` / Fixed Runtime 109；升级该依赖会破坏 Win7 支持。
+- 交付前需在 Win7 SP1 x64 虚拟机实测原生窗口、管理页、串口、托盘、自启与写超时。
 
 ### 11.2 Ubuntu 18.04 x86_64
 

@@ -53,4 +53,12 @@ fn origin_allowlist_rejects_host_suffix_and_requires_port() {
 fn cli_admin_flag_is_parsed() {
     let cli = Cli::parse_from(["ws2serial", "--admin"]);
     assert!(cli.force_admin);
+    assert!(!cli.minimized);
+}
+
+#[test]
+fn cli_minimized_flag_is_parsed() {
+    let cli = Cli::parse_from(["ws2serial", "--minimized"]);
+    assert!(cli.minimized);
+    assert!(!cli.force_admin);
 }

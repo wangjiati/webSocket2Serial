@@ -19,8 +19,8 @@ use windows_sys::Win32::Graphics::Gdi::{
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Shell::{
-    Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_ERROR, NIM_ADD, NIM_DELETE,
-    NIM_MODIFY, NIM_SETVERSION, NOTIFYICONDATAW, NOTIFYICON_VERSION_4,
+    Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIIF_ERROR, NIM_ADD,
+    NIM_DELETE, NIM_MODIFY, NIM_SETVERSION, NOTIFYICONDATAW, NOTIFYICON_VERSION_4,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIconIndirect, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon,
@@ -28,10 +28,11 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     PeekMessageW, PostQuitMessage, RegisterClassW, SetForegroundWindow, SetWindowLongPtrW,
     TrackPopupMenu, TranslateMessage, CREATESTRUCTW, GWLP_USERDATA, HICON, ICONINFO,
     MB_ICONINFORMATION, MB_OK, MB_SETFOREGROUND, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG,
-    PM_REMOVE, TPM_BOTTOMALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_APP, WM_DESTROY,
-    WM_LBUTTONDBLCLK, WM_NCCREATE, WM_QUIT, WM_RBUTTONUP, WNDCLASSW,
+    PM_REMOVE, TPM_BOTTOMALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_APP, WM_DESTROY, WM_NCCREATE,
+    WM_QUIT, WNDCLASSW,
 };
 
+use super::state::{tray_mouse_action, TrayMouseAction};
 use super::TrayState;
 use super::{TrayAction, TrayUpdate};
 
@@ -47,6 +48,7 @@ const ID_ADMIN: usize = 3;
 const ID_AUTOSTART: usize = 4;
 const ID_ABOUT: usize = 5;
 const ID_QUIT: usize = 6;
+const ID_BROWSER: usize = 7;
 
 /// 托盘线程上下文；通过窗口 GWLP_USERDATA 保存裸指针。
 struct TrayContext {
@@ -62,11 +64,12 @@ impl TrayContext {
     fn handle(&mut self, hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         match msg {
             WM_TRAY => {
-                // lParam 为图标上的鼠标事件。
-                if lparam == WM_LBUTTONDBLCLK as isize {
-                    let _ = self.action_tx.send(TrayAction::OpenAdmin);
-                } else if lparam == WM_RBUTTONUP as isize {
-                    self.show_menu();
+                match tray_mouse_action(lparam) {
+                    TrayMouseAction::OpenAdmin => {
+                        let _ = self.action_tx.send(TrayAction::OpenAdmin);
+                    }
+                    TrayMouseAction::OpenMenu => self.show_menu(),
+                    TrayMouseAction::None => {}
                 }
                 0
             }
@@ -83,7 +86,7 @@ impl TrayContext {
         let new_icon = make_icon(state.status.color());
         self.state = state;
         let mut nid = self.nid;
-        nid.uFlags = NIF_ICON | NIF_TIP;
+        nid.uFlags = NIF_ICON | NIF_TIP | NIF_SHOWTIP;
         nid.hIcon = new_icon;
         copy_wide(&mut nid.szTip, &self.state.tooltip);
         unsafe {
@@ -114,6 +117,7 @@ impl TrayContext {
 
         let status = wide(&format!("状态：{}", self.state.status.label()));
         let open = wide("打开管理页");
+        let browser = wide("在浏览器中打开");
         let admin = wide(if self.state.admin_enabled {
             "管理服务：关闭"
         } else {
@@ -131,6 +135,7 @@ impl TrayContext {
             AppendMenuW(menu, MF_STRING | MF_GRAYED, ID_STATUS, status.as_ptr());
             AppendMenuW(menu, MF_SEPARATOR, 0, null());
             AppendMenuW(menu, MF_STRING, ID_OPEN, open.as_ptr());
+            AppendMenuW(menu, MF_STRING, ID_BROWSER, browser.as_ptr());
             AppendMenuW(menu, MF_STRING, ID_ADMIN, admin.as_ptr());
             AppendMenuW(menu, MF_STRING, ID_AUTOSTART, autostart.as_ptr());
             AppendMenuW(menu, MF_SEPARATOR, 0, null());
@@ -164,6 +169,9 @@ impl TrayContext {
         match id {
             ID_OPEN => {
                 let _ = self.action_tx.send(TrayAction::OpenAdmin);
+            }
+            ID_BROWSER => {
+                let _ = self.action_tx.send(TrayAction::OpenBrowser);
             }
             ID_ADMIN => {
                 let enabled = !self.state.admin_enabled;
@@ -337,7 +345,7 @@ fn add_icon(ctx: *mut TrayContext) -> bool {
         nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
         nid.hWnd = ctx.hwnd;
         nid.uID = TRAY_UID;
-        nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+        nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP | NIF_SHOWTIP;
         nid.uCallbackMessage = WM_TRAY;
         nid.hIcon = ctx.icon;
         copy_wide(&mut nid.szTip, &ctx.state.tooltip);

@@ -11,16 +11,15 @@ pub const APP_NAME: &str = "WebSocket2Serial";
 /// Windows 当前用户 Run 键路径。
 pub const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 
-/// Windows Run 键值：把 exe 路径按命令行引用规则转成字符串。
+/// Windows Run 键值：带 `--minimized` 的可执行文件命令行。
 ///
-/// 含空格/制表符的路径用双引号包裹，保证被系统当作单个命令行参数解析；
-/// 不含特殊字符时原样返回。若未来追加参数，需在此按命令行引用规则一并处理。
+/// 含空格/制表符的路径用双引号包裹，保证被系统当作单个命令行参数解析。
 pub fn windows_run_value(path: &Path) -> String {
     let path = path.display().to_string();
     if path.contains(' ') || path.contains('\t') {
-        format!("\"{path}\"")
+        format!("\"{path}\" --minimized")
     } else {
-        path
+        format!("{path} --minimized")
     }
 }
 
