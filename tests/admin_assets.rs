@@ -60,10 +60,11 @@ fn assistant_has_chronological_ws_trace_panel() {
     ] {
         assert!(html.contains(&format!("id=\"{id}\"")), "missing {id}");
     }
-    assert!(html.contains(
-        "<details id=\"assistant-ws-trace\" class=\"card assistant-trace\">"
-    ));
-    let panel = html.split("<details id=\"assistant-ws-trace\"").nth(1).unwrap();
+    assert!(html.contains("<details id=\"assistant-ws-trace\" class=\"card assistant-trace\">"));
+    let panel = html
+        .split("<details id=\"assistant-ws-trace\"")
+        .nth(1)
+        .unwrap();
     assert!(panel.contains("观察管理 WS 与数据 WS 的报文原文"));
     assert!(panel.contains("href=\"/help\""));
 }
