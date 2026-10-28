@@ -70,7 +70,11 @@ fn navigation_allows_only_the_configured_loopback_origin() {
 #[test]
 fn navigation_blocks_non_web_and_malformed_urls() {
     let admin = "http://127.0.0.1:8766/";
-    for target in ["file:///C:/Windows/system.ini", "javascript:alert(1)", "not a url"] {
+    for target in [
+        "file:///C:/Windows/system.ini",
+        "javascript:alert(1)",
+        "not a url",
+    ] {
         assert_eq!(
             navigation_action(admin, target),
             NavigationAction::Block,
