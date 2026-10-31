@@ -27,6 +27,8 @@ use crate::paths;
 
 const WINDOW_CLASS: &str = "WebSocket2SerialDesktop";
 const WM_SHOW_DESKTOP: u32 = WM_APP + 20;
+/// 应用图标资源 ID；与 `src/assets/app.rc` 保持一致。
+const APP_ICON_ID: usize = 1;
 
 struct WebViewHost {
     controller: ICoreWebView2Controller,
@@ -81,9 +83,13 @@ pub(super) fn run(
     }
 
     let class_name = wide(WINDOW_CLASS);
+    let hinstance = unsafe { GetModuleHandleW(None).unwrap_or_default() };
+    let icon = unsafe { LoadIconW(hinstance, PCWSTR::from_raw(APP_ICON_ID as *const u16)) }
+        .unwrap_or(HICON(0));
     let class = WNDCLASSW {
         lpfnWndProc: Some(wnd_proc),
-        hInstance: unsafe { GetModuleHandleW(None).unwrap_or_default() },
+        hInstance: hinstance,
+        hIcon: icon,
         lpszClassName: PCWSTR::from_raw(class_name.as_ptr()),
         ..Default::default()
     };

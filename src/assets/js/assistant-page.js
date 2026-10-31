@@ -395,14 +395,27 @@ function readParams() {
 
 function renderPorts(ports) {
   const list = $("#assistant-port-list");
+  const input = $("#assistant-port");
   list.textContent = "";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = ports.length ? `扫描到 ${ports.length} 个串口` : "未检测到串口";
+  list.appendChild(placeholder);
   for (const port of ports) {
     const option = document.createElement("option");
     option.value = port.path;
+    option.textContent = port.path;
+    if (port.product) option.title = port.product;
     list.appendChild(option);
   }
-  if (!$("#assistant-port").value && ports[0]) {
-    $("#assistant-port").value = ports[0].path;
+  const current = input.value.trim();
+  if (current && ports.some((port) => port.path === current)) {
+    list.value = current;
+  } else if (!current && ports[0]) {
+    input.value = ports[0].path;
+    list.value = ports[0].path;
+  } else {
+    list.value = "";
   }
 }
 
@@ -759,6 +772,15 @@ async function reconnectSerial(client) {
 }
 
 function bindUI(client) {
+  $("#assistant-port-list").addEventListener("change", () => {
+    const path = $("#assistant-port-list").value;
+    if (path) $("#assistant-port").value = path;
+  });
+  $("#assistant-port").addEventListener("input", () => {
+    const list = $("#assistant-port-list");
+    const path = $("#assistant-port").value.trim();
+    list.value = Array.from(list.options).some((option) => option.value === path) ? path : "";
+  });
   $("#assistant-refresh-ports").addEventListener("click", () => refreshPortsFromButton(client));
   $("#assistant-ws-trace").addEventListener("toggle", () => {
     if ($("#assistant-ws-trace").open && !state.tracePaused) renderTrace();

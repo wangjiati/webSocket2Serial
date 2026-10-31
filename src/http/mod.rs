@@ -35,6 +35,9 @@ const TEST_HTML: &str = include_str!("../assets/test.html");
 const HELP_HTML: &str = include_str!("../assets/help.html");
 /// 内嵌的样式。
 const STYLE_CSS: &str = include_str!("../assets/style.css");
+/// 内嵌的应用图标（SVG 用于页面，ICO 用于传统 favicon）。
+const ICON_SVG: &str = include_str!("../assets/icon.svg");
+const ICON_ICO: &[u8] = include_bytes!("../assets/icon.ico");
 /// 内嵌的 JS 模块（任务 13）。
 const JS_API: &str = include_str!("../assets/js/api.js");
 const JS_OVERVIEW: &str = include_str!("../assets/js/overview.js");
@@ -238,6 +241,8 @@ fn build_router(management_port: u16, autostart: Arc<AtomicBool>, url: String) -
         .route("/test", get(test))
         .route("/help", get(help))
         .route("/style.css", get(style))
+        .route("/icon.svg", get(icon_svg))
+        .route("/favicon.ico", get(favicon))
         .route("/js/*path", get(js))
         .route("/api/config", get(config))
         .with_state(state)
@@ -266,6 +271,26 @@ async fn style() -> impl IntoResponse {
             (header::CACHE_CONTROL, "no-store"),
         ],
         STYLE_CSS,
+    )
+}
+
+async fn icon_svg() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "image/svg+xml; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        ICON_SVG,
+    )
+}
+
+async fn favicon() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "image/x-icon"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        ICON_ICO,
     )
 }
 

@@ -41,7 +41,7 @@ pub enum TrayStatus {
 }
 
 impl TrayStatus {
-    /// 图标颜色（0x00RRGGBB）。
+    /// 状态点颜色（0x00RRGGBB）。
     pub fn color(self) -> u32 {
         match self {
             TrayStatus::Idle => 0x00808080,

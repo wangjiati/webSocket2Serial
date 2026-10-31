@@ -37,12 +37,16 @@ fn management_refresh_ports_reports_success() {
     run_assistant_js_behavior("refresh");
 }
 
-/// 助手页提供手动重扫串口入口。
+/// 助手页提供手动重扫串口入口，并始终用原生 select 列出全部扫描结果。
 #[test]
 fn assistant_can_refresh_ports_on_demand() {
     let html = include_str!("../src/assets/assistant.html");
     assert!(html.contains("id=\"assistant-refresh-ports\""));
     assert!(html.contains(">刷新串口</button>"));
+    // datalist 会按输入框当前值过滤，已有选中串口时下拉只剩一项；改用 select 展示全部扫描结果。
+    assert!(html.contains("<select id=\"assistant-port-list\"></select>"));
+    assert!(!html.contains("<datalist"));
+    assert!(!html.contains("list=\"assistant-port-list\""));
 }
 
 /// WS 报文面板提供完整控制点，默认收起并链接协议帮助。
@@ -110,12 +114,74 @@ fn index_page_links_open_new_tabs() {
     assert!(api.contains("reconnect"));
 }
 
-/// 帮助文档独立页：包含通信协议章节。
+/// 四个页面共享同一套内嵌应用图标（SVG + ICO），不依赖外部文件或 CDN。
+#[test]
+fn pages_share_embedded_app_icon() {
+    let svg = include_str!("../src/assets/icon.svg");
+    assert!(svg.contains("viewBox=\"0 0 1024 1024\""));
+    assert!(svg.contains("fill=\"#1296db\""));
+    let ico = include_bytes!("../src/assets/icon.ico");
+    assert!(ico.len() > 100, "应用 ICO 不能为空");
+    assert!(ico.starts_with(&[0, 0, 1, 0]), "应用 ICO 头无效");
+    for (name, html) in [
+        ("index.html", include_str!("../src/assets/index.html")),
+        (
+            "assistant.html",
+            include_str!("../src/assets/assistant.html"),
+        ),
+        ("test.html", include_str!("../src/assets/test.html")),
+        ("help.html", include_str!("../src/assets/help.html")),
+    ] {
+        assert!(html.contains("href=\"/icon.svg\""), "{name} 缺少 SVG 图标");
+        assert!(
+            html.contains("href=\"/favicon.ico\""),
+            "{name} 缺少 ICO 图标"
+        );
+    }
+}
+
+/// Windows 资源声明了应用图标与四个托盘状态图标。
+#[test]
+fn windows_icon_resources_are_declared() {
+    let rc = include_str!("../src/assets/app.rc");
+    for id in 1..=5 {
+        assert!(rc.contains(&format!("{id} ICON ")), "缺少 ICON 资源 {id}");
+    }
+    for (name, bytes) in [
+        (
+            "tray-idle.ico",
+            include_bytes!("../src/assets/tray-idle.ico").as_slice(),
+        ),
+        (
+            "tray-active.ico",
+            include_bytes!("../src/assets/tray-active.ico").as_slice(),
+        ),
+        (
+            "tray-waiting.ico",
+            include_bytes!("../src/assets/tray-waiting.ico").as_slice(),
+        ),
+        (
+            "tray-error.ico",
+            include_bytes!("../src/assets/tray-error.ico").as_slice(),
+        ),
+    ] {
+        assert!(bytes.len() > 100, "{name} 不能为空");
+        assert!(bytes.starts_with(&[0, 0, 1, 0]), "{name} 头无效");
+    }
+}
+
+/// 帮助文档独立页：通信协议章节可折叠。
 #[test]
 fn help_page_has_protocol_chapter() {
     let html = include_str!("../src/assets/help.html");
     assert!(html.contains("id=\"help-page\""));
     assert!(html.contains("通信协议"));
+    // 通信协议与其他章节一致使用 <details>，并保留目录锚点与内部错误码跳转。
+    assert!(html.contains("<details id=\"protocol\">"));
+    assert!(html.contains("<summary>通信协议（ws2s/v1）</summary>"));
+    assert!(!html.contains("<h2 id=\"protocol\">"));
+    assert!(html.contains("id=\"errors\""));
+    assert!(html.contains("closest(\"details\")"));
     for term in [
         "ws2s/v1",
         "ports.list",
@@ -366,6 +432,8 @@ async fn static_assets_are_no_store() {
         "/test",
         "/help",
         "/style.css",
+        "/icon.svg",
+        "/favicon.ico",
         "/js/api.js",
         "/api/config",
     ] {

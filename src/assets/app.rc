@@ -1,0 +1,5 @@
+1 ICON "icon.ico"
+2 ICON "tray-idle.ico"
+3 ICON "tray-active.ico"
+4 ICON "tray-waiting.ico"
+5 ICON "tray-error.ico"

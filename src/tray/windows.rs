@@ -1,6 +1,7 @@
 //! Win32 `Shell_NotifyIcon` 托盘：专用线程、隐藏窗口消息循环、菜单与 GDI 图标。
 //!
-//! 图标用 GDI 生成 16×16 实心方块（32bpp DIB + 单色掩码），不引入图片资源。
+//! 图标优先使用 exe 内嵌的品牌图标（右下角状态点）；资源缺失时退回 GDI 生成的
+//! 16×16 实心方块（32bpp DIB + 单色掩码），保证托盘始终可见。
 //! 托盘菜单动作经 [`UnboundedSender<TrayAction>`] 发给 main；状态/气泡经
 //! [`Receiver<TrayUpdate>`] 从 main 收。菜单选择用 `TPM_RETURNCMD` 同步返回，
 //! 避免窗口过程重入处理 `WM_COMMAND`。
@@ -24,15 +25,15 @@ use windows_sys::Win32::UI::Shell::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIconIndirect, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon,
-    DestroyMenu, DestroyWindow, DispatchMessageW, GetCursorPos, GetWindowLongPtrW, MessageBoxW,
-    PeekMessageW, PostQuitMessage, RegisterClassW, SetForegroundWindow, SetWindowLongPtrW,
-    TrackPopupMenu, TranslateMessage, CREATESTRUCTW, GWLP_USERDATA, HICON, ICONINFO,
-    MB_ICONINFORMATION, MB_OK, MB_SETFOREGROUND, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG,
-    PM_REMOVE, TPM_BOTTOMALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_APP, WM_DESTROY, WM_NCCREATE,
-    WM_QUIT, WNDCLASSW,
+    DestroyMenu, DestroyWindow, DispatchMessageW, GetCursorPos, GetWindowLongPtrW, LoadImageW,
+    MessageBoxW, PeekMessageW, PostQuitMessage, RegisterClassW, SetForegroundWindow,
+    SetWindowLongPtrW, TrackPopupMenu, TranslateMessage, CREATESTRUCTW, GWLP_USERDATA, HICON,
+    ICONINFO, IMAGE_ICON, LR_DEFAULTCOLOR, MB_ICONINFORMATION, MB_OK, MB_SETFOREGROUND, MF_GRAYED,
+    MF_SEPARATOR, MF_STRING, MSG, PM_REMOVE, TPM_BOTTOMALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON,
+    WM_APP, WM_DESTROY, WM_NCCREATE, WM_QUIT, WNDCLASSW,
 };
 
-use super::state::{tray_mouse_action, TrayMouseAction};
+use super::state::{tray_mouse_action, TrayMouseAction, TrayStatus};
 use super::TrayState;
 use super::{TrayAction, TrayUpdate};
 
@@ -83,7 +84,7 @@ impl TrayContext {
 
     /// 更新图标/tooltip/菜单状态。
     fn apply_state(&mut self, state: TrayState) {
-        let new_icon = make_icon(state.status.color());
+        let new_icon = make_icon(state.status);
         self.state = state;
         let mut nid = self.nid;
         nid.uFlags = NIF_ICON | NIF_TIP | NIF_SHOWTIP;
@@ -241,7 +242,7 @@ fn run(
         nid: unsafe { std::mem::zeroed() },
         icon: 0,
     };
-    ctx.icon = make_icon(ctx.state.status.color());
+    ctx.icon = make_icon(ctx.state.status);
 
     let ctx_ptr = Box::into_raw(Box::new(ctx)) as *mut c_void;
     let hwnd = unsafe {
@@ -395,8 +396,37 @@ unsafe extern "system" fn wnd_proc(
     (*ctx).handle(hwnd, msg, wparam, lparam)
 }
 
+/// 托盘图标资源 ID；与 `src/assets/app.rc` 保持一致。
+fn tray_icon_id(status: TrayStatus) -> usize {
+    match status {
+        TrayStatus::Idle => 2,
+        TrayStatus::Active => 3,
+        TrayStatus::Waiting => 4,
+        TrayStatus::Error => 5,
+    }
+}
+
+/// 优先加载资源中的品牌图标（带状态点）；资源缺失时退回纯色方块。
+fn make_icon(status: TrayStatus) -> HICON {
+    let module = unsafe { GetModuleHandleW(null()) };
+    let handle = unsafe {
+        LoadImageW(
+            module,
+            tray_icon_id(status) as *const u16,
+            IMAGE_ICON,
+            0,
+            0,
+            LR_DEFAULTCOLOR,
+        )
+    };
+    if handle != 0 {
+        return handle as HICON;
+    }
+    make_solid_icon(status.color())
+}
+
 /// 生成 16×16 实心方块图标（32bpp DIB + 单色掩码全 0 = 不透明）。
-fn make_icon(rgb: u32) -> HICON {
+fn make_solid_icon(rgb: u32) -> HICON {
     const SIZE: i32 = 16;
     unsafe {
         let mut bmi: BITMAPINFO = std::mem::zeroed();

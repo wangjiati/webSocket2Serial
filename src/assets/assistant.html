@@ -4,6 +4,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>WebSocket2Serial 串口助手</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/favicon.ico" type="image/x-icon" />
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
@@ -28,9 +30,12 @@
         <div class="assistant-form">
           <label class="field wide">
             <span>串口</span>
-            <input id="assistant-port" type="text" list="assistant-port-list" placeholder="选择或输入串口" />
+            <input id="assistant-port" type="text" placeholder="选择或输入串口" />
           </label>
-          <datalist id="assistant-port-list"></datalist>
+          <label class="field">
+            <span>扫描到的串口</span>
+            <select id="assistant-port-list"></select>
+          </label>
           <button id="assistant-refresh-ports" type="button">刷新串口</button>
           <label class="field">
             <span>波特率</span>
